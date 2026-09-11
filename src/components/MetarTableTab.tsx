@@ -58,6 +58,10 @@ export default function MetarTableTab() {
   const [showWita, setShowWita] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
 
+  // States Override Bulan & Tahun Manual
+  const [overrideMonth, setOverrideMonth] = useState<string>("");
+  const [overrideYear, setOverrideYear] = useState<string>("");
+
   const [visibleColumns, setVisibleColumns] = useState({
     angin: true,
     variabilitas: true,
@@ -96,7 +100,7 @@ export default function MetarTableTab() {
   const handleGenerate = () => {
     if (!inputText.trim())
       return showToastMsg(
-        "⚠️ Masukkan data METAR to yaaa, terus ini mau generate apaan?!",
+        "⚠️ Masukkan data METAR nya yaaa, terus ini mau generate apaan?!",
       );
 
     const lines = inputText.trim().split("\n");
@@ -111,14 +115,18 @@ export default function MetarTableTab() {
     if (list.length === 0)
       return showToastMsg("⚠️ Format METAR tidak ditemukan atau data kosong!");
 
+    // Sorting Chronological dengan Cek Nyebrang Bulan
     list.sort((a, b) => {
       let dayA = parseInt(a.day, 10),
         dayB = parseInt(b.day, 10);
       let timeA = parseInt(a.waktuZ.replace("Z", ""), 10),
         timeB = parseInt(b.waktuZ.replace("Z", ""), 10);
-      if (dayA > 20 && dayB < 10) dayB += 31;
-      else if (dayB > 20 && dayA < 10) dayA += 31;
-      return dayA * 10000 + timeA - (dayB * 10000 + timeB);
+
+      if (dayA > 20 && dayB < 10) return -1; // dayA (misal 31) lebih dulu dari dayB (misal 1)
+      if (dayB > 20 && dayA < 10) return 1;
+
+      if (dayA !== dayB) return dayA - dayB;
+      return timeA - timeB;
     });
 
     setParsedData(list);
@@ -126,30 +134,76 @@ export default function MetarTableTab() {
     setIsEditingAi(false);
   };
 
-  const parseMetarDate = (dayStr: string, timeStr: string) => {
+  // KALKULASI BARIS OTOMATIS: Track offset bulan dan tahun yang menyebrang
+  const processedRows = useMemo(() => {
+    if (parsedData.length === 0) return [];
+
+    // 1. Hitung Offset Bulan
+    let monthOffsets = new Array(parsedData.length).fill(0);
+    let currentOffset = 0;
+    for (let i = 1; i < parsedData.length; i++) {
+      let prevDay = parseInt(parsedData[i - 1].day, 10);
+      let currDay = parseInt(parsedData[i].day, 10);
+      // Jika anjlok dari tanggal besar (>20) ke kecil (<10), artinya masuk bulan baru
+      if (prevDay > 20 && currDay < 10) {
+        currentOffset += 1;
+      }
+      monthOffsets[i] = currentOffset;
+    }
+
+    let maxOffset = currentOffset;
+    let startM = 0;
+    let startY = 0;
     let now = new Date();
-    let year = now.getUTCFullYear();
-    let month = now.getUTCMonth();
-    let day = parseInt(dayStr, 10);
-    if (day > now.getUTCDate() + 5) {
-      month -= 1;
-      if (month < 0) {
-        month = 11;
-        year -= 1;
+
+    if (overrideMonth !== "" && overrideYear !== "") {
+      // MODE MANUAL: Jangkar bulan/tahun pada data PERTAMA (terlama)
+      startM = parseInt(overrideMonth, 10);
+      startY = parseInt(overrideYear, 10);
+    } else {
+      // MODE AUTO: Jangkar bulan/tahun pada data TERAKHIR (terbaru) terhadap waktu sekarang
+      let lastDay = parseInt(parsedData[parsedData.length - 1].day, 10);
+      let endM = now.getUTCMonth();
+      let endY = now.getUTCFullYear();
+
+      if (lastDay > now.getUTCDate() + 5) {
+        endM -= 1;
+        if (endM < 0) {
+          endM = 11;
+          endY -= 1;
+        }
+      }
+
+      startM = endM - maxOffset;
+      startY = endY;
+      while (startM < 0) {
+        startM += 12;
+        startY -= 1;
       }
     }
-    let hours = timeStr === "-" ? 0 : parseInt(timeStr.slice(0, 2), 10);
-    let mins = timeStr === "-" ? 0 : parseInt(timeStr.slice(2, 4), 10);
-    return new Date(Date.UTC(year, month, day, hours, mins));
-  };
 
-  // Pindahkan processedRows ke useMemo agar nilainya bisa dibaca di seluruh komponen secara real-time
-  const processedRows = useMemo(() => {
-    return parsedData.map((data) => {
-      const utcDateObj = parseMetarDate(data.day, data.waktuZ);
-      const displayDateObj = new Date(
+    // 2. Terapkan Tanggal Mutlak ke Semua Row
+    return parsedData.map((data, idx) => {
+      let day = parseInt(data.day, 10);
+      let m = startM + monthOffsets[idx];
+      let y = startY;
+
+      // Handle Tahun Nyebrang (Desember ke Januari)
+      while (m > 11) {
+        m -= 12;
+        y += 1;
+      }
+
+      let hours =
+        data.waktuZ === "-" ? 0 : parseInt(data.waktuZ.slice(0, 2), 10);
+      let mins =
+        data.waktuZ === "-" ? 0 : parseInt(data.waktuZ.slice(2, 4), 10);
+
+      let utcDateObj = new Date(Date.UTC(y, m, day, hours, mins));
+      let displayDateObj = new Date(
         utcDateObj.getTime() + (showWita ? 8 * 3600000 : 0),
       );
+
       return {
         ...data,
         displayDay: displayDateObj.getUTCDate(),
@@ -162,7 +216,7 @@ export default function MetarTableTab() {
             : "-",
       };
     });
-  }, [parsedData, showWita]);
+  }, [parsedData, showWita, overrideMonth, overrideYear]);
 
   const uniqueDates = new Set(processedRows.map((r) => r.displayDateStr));
   const hasMultipleDates = uniqueDates.size > 1;
@@ -172,7 +226,7 @@ export default function MetarTableTab() {
     if (hasMultipleDates) {
       const first = processedRows[0];
       const last = processedRows[processedRows.length - 1];
-      titleDateStr = `Periode: ${first.displayDay} ${first.displayMonthName} - ${last.displayDateStr}`;
+      titleDateStr = `Periode: ${first.displayDay} ${first.displayMonthName} ${first.displayYear} - ${last.displayDateStr}`;
     } else {
       titleDateStr = `Tanggal: ${processedRows[0].displayDateStr}`;
     }
@@ -186,7 +240,6 @@ export default function MetarTableTab() {
       const res = await fetch("/api/gemini", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // Kirim processedRows agar AI tau jam pastinya, dan kirim parameter timezone & period
         body: JSON.stringify({
           dataMetar: processedRows,
           timezone: showWita ? "WITA" : "UTC",
@@ -287,7 +340,6 @@ export default function MetarTableTab() {
   if (avgDirRaw < 0) avgDirRaw += 360;
   let avgDir = Math.round(avgDirRaw / 10) * 10;
   if (avgDir === 0 && validWindCount > 0) avgDir = 360;
-
   let avgSpd = validWindCount > 0 ? Math.round(sumSpd / validWindCount) : 0;
 
   return (
@@ -341,16 +393,51 @@ export default function MetarTableTab() {
                 />{" "}
                 Waktu WITA
               </label>
-              <label className="flex items-center gap-2 cursor-pointer text-sm font-bold text-slate-700 bg-white px-4 py-2 rounded-lg shadow-sm border border-slate-200">
-                <input
-                  type="checkbox"
-                  checked={showDashboard}
-                  onChange={() => setShowDashboard(!showDashboard)}
-                  className="rounded text-blue-600 w-4 h-4"
-                />{" "}
-                Dashboard Angin & Grafik
-              </label>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 cursor-pointer text-sm font-bold text-slate-700 bg-white px-4 py-2 rounded-lg shadow-sm border border-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={showDashboard}
+                    onChange={() => setShowDashboard(!showDashboard)}
+                    className="rounded text-blue-600 w-4 h-4"
+                  />{" "}
+                  Grafik Angin & Visibility
+                </label>
+
+                <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm">
+                  <select
+                    value={overrideMonth}
+                    onChange={(e) => setOverrideMonth(e.target.value)}
+                    className="bg-transparent text-slate-700 text-xs font-semibold focus:outline-none cursor-pointer"
+                  >
+                    <option value="">Bulan (Auto)</option>
+                    {monthNamesFull.map((m, i) => (
+                      <option key={i} value={i}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-slate-300">|</span>
+                  <select
+                    value={overrideYear}
+                    onChange={(e) => setOverrideYear(e.target.value)}
+                    className="bg-transparent text-slate-700 text-xs font-semibold focus:outline-none cursor-pointer"
+                  >
+                    <option value="">Tahun (Auto)</option>
+                    {Array.from({ length: 10 }).map((_, i) => {
+                      const y = new Date().getFullYear() - i;
+                      return (
+                        <option key={y} value={y}>
+                          {y}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              </div>
             </div>
+
             <div className="flex flex-wrap gap-2 text-xs">
               {Object.keys(visibleColumns).map((col) => (
                 <label
@@ -457,6 +544,7 @@ export default function MetarTableTab() {
                       idx === 0 ||
                       data.displayDateStr !==
                         processedRows[idx - 1].displayDateStr;
+
                     let anginStr =
                       data.windDir && data.windSpd
                         ? `${data.windDir}°/${data.windSpd}${data.windUnit}`
@@ -659,11 +747,9 @@ export default function MetarTableTab() {
                   <textarea
                     value={aiResponse}
                     onChange={(e) => setAiResponse(e.target.value)}
-                    // Penambahan text-justify pada textarea
                     className="w-full h-48 p-4 bg-slate-800 border border-slate-600 rounded-lg text-slate-200 text-sm md:text-base leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-500 text-justify"
                   />
                 ) : (
-                  // Penambahan text-justify pada div output
                   <div className="text-slate-200 text-sm md:text-base leading-relaxed whitespace-pre-line text-justify">
                     {aiResponse}
                   </div>

@@ -57,9 +57,10 @@ export function parseSingleMetar(metarStr: string): MetarParsedData {
 
   let inTrend = false,
     inRmk = false;
+
   const windRegex = /^(\d{3}|VRB)P?(\d{2,3})(?:G(\d{2,3}))?(KT|MPS)$/;
   const weatherRegex =
-    /^(\+|-|VC)?(MI|PR|BC|DR|BL|SH|TS|FZ)?(DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PO|SQ|FC|SS|DS)$/;
+    /^(\+|-|VC)?((MI|PR|BC|DR|BL|SH|TS|FZ)(DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PO|SQ|FC|SS|DS)?|(DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PO|SQ|FC|SS|DS))$/;
   const cloudRegex = /^(FEW|SCT|BKN|OVC|VV)(\d{3}|\/\/\/)(CB|TCU)?$/;
 
   for (let i = 0; i < tokens.length; i++) {
@@ -139,11 +140,17 @@ export function getCommonWeatherDesc(code: string) {
   if (code.includes("HZ")) desc += "Haze ";
   if (code.includes("FU")) desc += "Asap ";
   if (code.includes("SN")) desc += "Snow ";
-  if (code.includes("VCTS")) return "Thunderstorm di Sekitar";
-  if (code.includes("VCSH")) return "Hujan di Sekitar";
-  if (code.startsWith("-")) desc = "Light " + desc;
-  if (code.startsWith("+")) desc = "Heavy " + desc;
-  return desc.trim() || code;
+
+  let finalDesc = desc.trim();
+
+  if (code.startsWith("VC"))
+    return finalDesc
+      ? finalDesc + " di Sekitar"
+      : "Vicinity " + code.substring(2);
+  if (code.startsWith("-")) return "Light " + finalDesc;
+  if (code.startsWith("+")) return "Heavy " + finalDesc;
+
+  return finalDesc || code;
 }
 
 export function translateWxToMetReport(wx: string) {
@@ -158,7 +165,10 @@ export function translateWxToMetReport(wx: string) {
   } else if (wx.startsWith("VC")) {
     prefix = "VC";
     core = wx.substring(2);
-  } else if (/RA|DZ|SN|SH|TS|GR|GS|PL/.test(wx)) prefix = "MOD ";
+  } else if (/RA|DZ|SN|SH|GR|GS|PL/.test(wx)) {
+    // TS DIHAPUS DARI SINI: Jadi kalau cuaca cuma TS gak akan ditambahin MOD.
+    prefix = "MOD ";
+  }
   return prefix + core;
 }
 
