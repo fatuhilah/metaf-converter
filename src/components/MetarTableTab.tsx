@@ -17,6 +17,7 @@ import {
   ArrowUp,
   Edit,
   Save,
+  ArrowDown,
 } from "lucide-react";
 import { toJpeg } from "html-to-image";
 import { Bar } from "react-chartjs-2";
@@ -679,7 +680,7 @@ export default function MetarTableTab() {
                       E
                     </span>
                     {validWindCount > 0 ? (
-                      <ArrowUp
+                      <ArrowDown
                         size={36}
                         className="text-rose-500 drop-shadow-md"
                         style={{ transform: `rotate(${avgDir}deg)` }}
