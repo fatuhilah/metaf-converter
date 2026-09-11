@@ -157,7 +157,7 @@ export default function MetarReportTab() {
           <textarea
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
-            placeholder="Contoh: METAR WALS 110230Z 21006KT 9999 SCT020 32/23 Q1013 NOSIG="
+            placeholder="Input METAR / SPECI disini..."
             className="w-full h-24 p-3 text-sm font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
           />
         </div>
