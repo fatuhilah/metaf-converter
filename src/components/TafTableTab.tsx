@@ -299,7 +299,7 @@ export default function TafTableTab() {
     const copyString = tableRows
       .map(
         (r) =>
-          `${r.currentType || ""}\t${r.changeColText || ""}\t${r.A || ""}\t${r.B1 || ""}\t${r.B2 || ""}\t${r.C || ""}\t${r.D || ""}\t${r.E || ""}\t${r.F || ""}`,
+          `\({r.currentType || ""}\t\){r.changeColText || ""}\t\({r.A === "VRB" ? "999" : r.A || ""}\t\){r.B1 || ""}\t\({r.B2 || ""}\t\){r.C || ""}\t\({r.D || ""}\t\){r.E || ""}\t${r.F || ""}`,
       )
       .join("\n");
     navigator.clipboard.writeText(copyString);
@@ -451,7 +451,7 @@ export default function TafTableTab() {
                         {r.changeColText}
                       </td>
                       <td className="border border-slate-300 p-1.5 text-center">
-                        {r.A}
+                        {r.A === "VRB" ? "999" : r.A}
                       </td>
                       <td className="border border-slate-300 p-1.5 text-center">
                         {r.B1}

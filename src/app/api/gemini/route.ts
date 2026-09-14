@@ -28,6 +28,7 @@ export async function POST(req: Request) {
       6. WAKTU DAN TANGGAL: Pengguna saat ini melihat data dalam zona waktu ${timezone}. 
          Gunakan waktu tersebut dalam analisis Anda (jangan gunakan Z atau UTC jika zona waktunya WITA).
          Saat menyebutkan tanggal di paragraf, WAJIB tuliskan LENGKAP dengan bulan dan tahun.
+      7. WALS itu adalah kode ICAO untuk Bandara Aji Pangeran Tumenggung Pranoto.
       
       Berikan jawaban atau analisis profesional Anda:
     `;
