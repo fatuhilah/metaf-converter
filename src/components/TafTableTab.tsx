@@ -299,7 +299,7 @@ export default function TafTableTab() {
     const copyString = tableRows
       .map(
         (r) =>
-          `\({r.currentType || ""}\t\){r.changeColText || ""}\t\({r.A === "VRB" ? "999" : r.A || ""}\t\){r.B1 || ""}\t\({r.B2 || ""}\t\){r.C || ""}\t\({r.D || ""}\t\){r.E || ""}\t${r.F || ""}`,
+          `${r.currentType || ""}\t${r.changeColText || ""}\t${r.A === "VRB" ? "999" : r.A || ""}\t${r.B1 || ""}\t${r.B2 || ""}\t${r.C || ""}\t${r.D || ""}\t${r.E || ""}\t${r.F || "2000"}`,
       )
       .join("\n");
     navigator.clipboard.writeText(copyString);
@@ -512,40 +512,46 @@ export default function TafTableTab() {
                     {rawTafHeader}
                   </p>
                 </div>
-
                 <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-0 border-l border-t border-slate-800">
-                  {tableRows.map((r, idx) => (
-                    <div
-                      key={idx}
-                      className="border-r border-b border-slate-800 p-3 flex flex-col items-center justify-start text-center space-y-2"
-                    >
-                      <div className="font-bold text-sm tracking-wide bg-slate-100 w-full rounded-sm py-1 border-b border-slate-300">
-                        {r.timeStr} Z
+                  {tableRows
+                    .filter((r) => r.timeStr.endsWith("00"))
+                    .map((r, idx) => (
+                      <div
+                        key={idx}
+                        className="border-r border-b border-slate-800 p-3 flex flex-col items-center justify-start text-center space-y-2"
+                      >
+                        <div className="font-bold text-sm tracking-wide bg-slate-100 w-full rounded-sm py-1 border-b border-slate-300">
+                          {r.timeStr} Z
+                        </div>
+
+                        <div className="h-12 flex items-center justify-center my-2">
+                          <img
+                            src={getBmkgIconUrl(r.D, r.E)}
+                            alt="Weather Icon"
+                            className="w-10 h-10 drop-shadow-sm"
+                            crossOrigin="anonymous"
+                          />
+                        </div>
+
+                        <div className="text-xs font-semibold text-slate-800 space-y-1 w-full">
+                          <div className="border-b border-slate-200 pb-1">
+                            {r.A ? `${r.A}/${r.B1}KT` : "Calm"}
+                          </div>
+
+                          <div className="border-b border-slate-200 pb-1">
+                            {r.C === "9999" ? "10 KM" : `${r.C} M`}
+                          </div>
+
+                          <div className="border-b border-slate-200 pb-1 text-rose-700">
+                            {r.D || "NSW"}
+                          </div>
+
+                          <div className="pt-1">
+                            {r.E && r.F ? `${r.E}${r.F}` : "NSC"}
+                          </div>
+                        </div>
                       </div>
-                      <div className="h-12 flex items-center justify-center my-2">
-                        <img
-                          src={getBmkgIconUrl(r.D, r.E)}
-                          alt="Weather Icon"
-                          className="w-10 h-10 drop-shadow-sm"
-                          crossOrigin="anonymous"
-                        />
-                      </div>
-                      <div className="text-xs font-semibold text-slate-800 space-y-1 w-full">
-                        <div className="border-b border-slate-200 pb-1">
-                          {r.A ? `${r.A}/${r.B1}KT` : "Calm"}
-                        </div>
-                        <div className="border-b border-slate-200 pb-1">
-                          {r.C === "9999" ? "10 KM" : `${r.C} M`}
-                        </div>
-                        <div className="border-b border-slate-200 pb-1 text-rose-700">
-                          {r.D || "NSW"}
-                        </div>
-                        <div className="pt-1">
-                          {r.E && r.F ? `${r.E}${r.F}` : "NSC"}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                    ))}
                 </div>
               </div>
             </div>
