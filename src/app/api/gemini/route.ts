@@ -34,7 +34,7 @@ export async function POST(req: Request) {
     `;
 
     const interaction = await (ai as any).interactions.create({
-      model: "gemini-3.6-flash",
+      model: "gemini-3.8-flash",
       input: systemPrompt,
     });
 
