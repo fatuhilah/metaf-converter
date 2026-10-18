@@ -132,8 +132,18 @@ export default function TafTableTab() {
       }
       let cloudMatch = t.match(/^(FEW|SCT|BKN|OVC|VV)(\d{3})(CB|TCU)?$/);
       if (cloudMatch) {
-        currentGroup.E = cloudMatch[1];
-        currentGroup.F = (parseInt(cloudMatch[2], 10) * 100).toString();
+        let isConvective = cloudMatch[3] !== undefined;
+
+        // Cegah penimpaan (overwrite) jika awan sebelumnya di grup ini sudah CB/TCU
+        // dan awan yang sedang dibaca saat ini BUKAN CB/TCU
+        if (currentGroup.isConvective && !isConvective) {
+          // Skip, pertahankan data awan CB/TCU
+        } else {
+          currentGroup.E = cloudMatch[1];
+          currentGroup.F = (parseInt(cloudMatch[2], 10) * 100).toString();
+          if (isConvective) currentGroup.isConvective = true; // Tandai bahwa ada awan prioritas
+        }
+
         if (currentGroup.type && !currentGroup.changes.includes("CLD"))
           currentGroup.changes.push("CLD");
         continue;
