@@ -5,19 +5,19 @@ import {
   getCommonWeatherDesc,
   MetarParsedData,
 } from "@/utils/parser";
+import { getStationByIcao } from "@/utils/stations";
 import {
   Bot,
   Copy,
   Download,
-  SlidersHorizontal,
   Check,
-  Wind,
   TrendingUp,
   AlertCircle,
-  ArrowUp,
   Edit,
   Save,
   ArrowDown,
+  Clock,
+  MapPin,
 } from "lucide-react";
 import { toJpeg } from "html-to-image";
 import { Bar } from "react-chartjs-2";
@@ -40,9 +40,161 @@ ChartJS.register(
   Legend,
 );
 
+type TimezoneOption = "UTC" | "WIB" | "WITA" | "WIT";
+
+interface ExtendedMetarData extends MetarParsedData {
+  recentWxTokens: string[];
+}
+
+const TZ_OFFSETS: Record<TimezoneOption, number> = {
+  UTC: 0,
+  WIB: 7,
+  WITA: 8,
+  WIT: 9,
+};
+
+const getAirportName = (info: unknown): string => {
+  if (!info || typeof info !== "object") return "";
+  const record = info as Record<string, unknown>;
+
+  const direct =
+    record.nama_bandara ||
+    record.namaBandara ||
+    record.bandar_udara ||
+    record.bandarUdara ||
+    record.bandara ||
+    record.airport ||
+    record.airport_name ||
+    record.airportName ||
+    record.nama ||
+    record.name;
+
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim();
+  }
+
+  for (const [key, val] of Object.entries(record)) {
+    if (
+      typeof val === "string" &&
+      val.trim() &&
+      !/^[A-Z]{4}$/.test(val.trim()) &&
+      !key.toLowerCase().includes("stasiun") &&
+      !key.toLowerCase().includes("station") &&
+      !key.toLowerCase().includes("wmo")
+    ) {
+      return val.trim();
+    }
+  }
+
+  return "";
+};
+
+const getStationName = (info: unknown): string => {
+  if (!info || typeof info !== "object") return "";
+  const record = info as Record<string, unknown>;
+
+  const direct =
+    record.nama_stasiun ||
+    record.namaStasiun ||
+    record.stasiun_meteorologi ||
+    record.stasiunMeteorologi ||
+    record.stasiun ||
+    record.station ||
+    record.station_name ||
+    record.stationName;
+
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim();
+  }
+
+  for (const [key, val] of Object.entries(record)) {
+    if (
+      typeof val === "string" &&
+      val.trim() &&
+      (key.toLowerCase().includes("stasiun") ||
+        key.toLowerCase().includes("station"))
+    ) {
+      return val.trim();
+    }
+  }
+
+  return "";
+};
+
+// Ekstrak kode ICAO 4 huruf secara eksplisit sebelum grup waktu Zulu (tanpa fallback default)
+const extractIcaoCode = (rawLine: string): string => {
+  const clean = rawLine.replace(/=.*$/g, "").trim().toUpperCase();
+  const tokens = clean.split(/\s+/);
+  const ignoreTokens = new Set([
+    "METAR",
+    "SPECI",
+    "COR",
+    "AUTO",
+    "AMD",
+    "RTD",
+    "NIL",
+  ]);
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (/^\d{6}Z$/.test(t) || /^(\d{3}|VRB)P?\d{2,3}/.test(t)) {
+      break;
+    }
+    if (ignoreTokens.has(t)) continue;
+    if (/^[A-Z]{4}$/.test(t)) {
+      return t;
+    }
+  }
+  return "";
+};
+
+// Ekstrak token Recent Weather (misal: RERA, RETS, RETSRA, RESHRA)
+const extractRecentWeather = (rawLine: string): string[] => {
+  const clean = rawLine.replace(/=.*$/g, "").trim().toUpperCase();
+  const tokens = clean.split(/\s+/);
+  const recentRegex =
+    /^RE(?:MI|PR|BC|DR|BL|SH|TS|FZ)?(?:DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PO|SQ|FC|SS|DS)+$/;
+  const found: string[] = [];
+
+  for (const t of tokens) {
+    if (t === "RMK") break;
+    if (recentRegex.test(t)) {
+      found.push(t);
+    }
+  }
+  return found;
+};
+
+// Format awan: FEW015CB -> FEW CB 1500 FT, SCT016 -> SCT 1600 FT
+const formatCloudForTable = (cld: string): string => {
+  if (cld === "NSC" || cld === "NCD" || cld === "CAVOK") return cld;
+  const match = cld.match(/^(FEW|SCT|BKN|OVC|VV)(\d{3}|\/\/\/)(CB|TCU)?$/);
+  if (match) {
+    const type = match[1];
+    const heightRaw = match[2];
+    const cbTcu = match[3] ? ` ${match[3]}` : "";
+    const height =
+      heightRaw === "///" ? "/// FT" : `${parseInt(heightRaw, 10) * 100} FT`;
+    return `${type}${cbTcu} ${height}`;
+  }
+  return cld;
+};
+
+// Format Recent Weather untuk tampilan tabel
+const formatRecentWeather = (tokens: string[]): string => {
+  if (!tokens || tokens.length === 0) return "-";
+  return tokens
+    .map((t) => {
+      const wxPart = t.startsWith("RE") ? t.slice(2) : t;
+      const desc = getCommonWeatherDesc(wxPart);
+      return desc && desc !== wxPart ? `${desc} (${t})` : t;
+    })
+    .join(", ");
+};
+
 export default function MetarTableTab() {
   const [inputText, setInputText] = useState("");
-  const [parsedData, setParsedData] = useState<MetarParsedData[]>([]);
+  const [parsedData, setParsedData] = useState<ExtendedMetarData[]>([]);
 
   // States AI & UI
   const [aiResponse, setAiResponse] = useState<string>("");
@@ -56,7 +208,7 @@ export default function MetarTableTab() {
   const tableRef = useRef<HTMLDivElement>(null);
   const dashboardRef = useRef<HTMLDivElement>(null);
 
-  const [showWita, setShowWita] = useState(false);
+  const [timezone, setTimezone] = useState<TimezoneOption>("UTC");
   const [showDashboard, setShowDashboard] = useState(false);
 
   // States Override Bulan & Tahun Manual
@@ -71,9 +223,23 @@ export default function MetarTableTab() {
     awan: true,
     suhu: true,
     qnh: true,
+    recentWeather: true,
     trend: true,
     remark: true,
   });
+
+  const columnLabels: Record<keyof typeof visibleColumns, string> = {
+    angin: "Angin",
+    variabilitas: "Variabilitas",
+    visibility: "Visibility",
+    cuaca: "Cuaca",
+    awan: "Awan",
+    suhu: "Suhu",
+    qnh: "QNH",
+    recentWeather: "Recent Weather",
+    trend: "Trend",
+    remark: "Remark",
+  };
 
   const monthNamesFull = [
     "Januari",
@@ -98,20 +264,69 @@ export default function MetarTableTab() {
     setTimeout(() => setToast(null), 3000);
   };
 
+  // Deteksi otomatis info bandara & stasiun dari baris pertama input
+  const detectedStation = useMemo(() => {
+    if (!inputText.trim()) return null;
+    const firstValidLine = inputText
+      .trim()
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l && !l.startsWith("SAID"));
+    if (!firstValidLine) return null;
+
+    const code = extractIcaoCode(firstValidLine);
+    if (!code) {
+      return {
+        icao: "",
+        bandara: "",
+        stasiun: "",
+        found: false,
+        missingIcao: true,
+      };
+    }
+
+    const info = getStationByIcao(code);
+    const bandara = getAirportName(info);
+    const stasiun = getStationName(info);
+
+    return {
+      icao: code,
+      bandara,
+      stasiun,
+      found: Boolean(info && (bandara || stasiun)),
+      missingIcao: false,
+    };
+  }, [inputText]);
+
   const handleGenerate = () => {
     if (!inputText.trim())
       return showToastMsg(
-        "⚠️ Masukkan data METAR nya yaaa, terus ini mau generate apaan?!",
+        "⚠️ Masukkan data METAR/SPECI nya yaaa, terus ini mau generate apaan?!",
       );
 
     const lines = inputText.trim().split("\n");
-    let list: MetarParsedData[] = [];
+    let list: ExtendedMetarData[] = [];
 
-    lines.forEach((line) => {
-      if (line.trim() && !line.startsWith("SAID")) {
-        list.push(parseSingleMetar(line.trim()));
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("SAID")) continue;
+
+      const icaoCode = extractIcaoCode(line);
+      if (!icaoCode) {
+        return showToastMsg(
+          "⚠️ Kode ICAO stasiun tidak ditemukan! Pastikan kode ICAO (4 huruf) dicantumkan.",
+        );
       }
-    });
+
+      const parsed = parseSingleMetar(line);
+      const recentWxTokens = extractRecentWeather(line);
+
+      list.push({
+        ...parsed,
+        station: icaoCode,
+        recentWxTokens,
+      });
+    }
 
     if (list.length === 0)
       return showToastMsg("⚠️ Format METAR tidak ditemukan atau data kosong!");
@@ -123,7 +338,7 @@ export default function MetarTableTab() {
       let timeA = parseInt(a.waktuZ.replace("Z", ""), 10),
         timeB = parseInt(b.waktuZ.replace("Z", ""), 10);
 
-      if (dayA > 20 && dayB < 10) return -1; // dayA (misal 31) lebih dulu dari dayB (misal 1)
+      if (dayA > 20 && dayB < 10) return -1;
       if (dayB > 20 && dayA < 10) return 1;
 
       if (dayA !== dayB) return dayA - dayB;
@@ -145,7 +360,6 @@ export default function MetarTableTab() {
     for (let i = 1; i < parsedData.length; i++) {
       let prevDay = parseInt(parsedData[i - 1].day, 10);
       let currDay = parseInt(parsedData[i].day, 10);
-      // Jika anjlok dari tanggal besar (>20) ke kecil (<10), artinya masuk bulan baru
       if (prevDay > 20 && currDay < 10) {
         currentOffset += 1;
       }
@@ -183,13 +397,14 @@ export default function MetarTableTab() {
       }
     }
 
+    const offsetMs = TZ_OFFSETS[timezone] * 3600000;
+
     // 2. Terapkan Tanggal Mutlak ke Semua Row
     return parsedData.map((data, idx) => {
       let day = parseInt(data.day, 10);
       let m = startM + monthOffsets[idx];
       let y = startY;
 
-      // Handle Tahun Nyebrang (Desember ke Januari)
       while (m > 11) {
         m -= 12;
         y += 1;
@@ -201,9 +416,7 @@ export default function MetarTableTab() {
         data.waktuZ === "-" ? 0 : parseInt(data.waktuZ.slice(2, 4), 10);
 
       let utcDateObj = new Date(Date.UTC(y, m, day, hours, mins));
-      let displayDateObj = new Date(
-        utcDateObj.getTime() + (showWita ? 8 * 3600000 : 0),
-      );
+      let displayDateObj = new Date(utcDateObj.getTime() + offsetMs);
 
       return {
         ...data,
@@ -217,7 +430,39 @@ export default function MetarTableTab() {
             : "-",
       };
     });
-  }, [parsedData, showWita, overrideMonth, overrideYear]);
+  }, [parsedData, timezone, overrideMonth, overrideYear]);
+
+  // Judul Bandara Dinamis dari stations.ts dengan prefix "Data Cuaca"
+  const tableHeaderTitle = useMemo(() => {
+    if (processedRows.length === 0) return "Data Cuaca Bandara";
+
+    const uniqueStations = Array.from(
+      new Set(
+        processedRows
+          .map((r) => (r.station || "").trim().toUpperCase())
+          .filter(Boolean),
+      ),
+    );
+
+    if (uniqueStations.length > 1) {
+      return `Data Cuaca Multi-Stasiun (${uniqueStations.join(", ")})`;
+    }
+
+    const stationCode = uniqueStations[0];
+    if (!stationCode) return "Data Cuaca Bandara";
+
+    const stationInfo = getStationByIcao(stationCode);
+    const airportName = getAirportName(stationInfo);
+
+    if (airportName) {
+      const formattedAirport = airportName.toLowerCase().startsWith("bandara ")
+        ? airportName
+        : `Bandara ${airportName}`;
+      return `Data Cuaca ${formattedAirport} (${stationCode})`;
+    }
+
+    return `Data Cuaca Bandara (${stationCode})`;
+  }, [processedRows]);
 
   const uniqueDates = new Set(processedRows.map((r) => r.displayDateStr));
   const hasMultipleDates = uniqueDates.size > 1;
@@ -243,7 +488,7 @@ export default function MetarTableTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           dataMetar: processedRows,
-          timezone: showWita ? "WITA" : "UTC",
+          timezone: timezone,
           period: titleDateStr,
         }),
       });
@@ -254,8 +499,9 @@ export default function MetarTableTab() {
         .replace(/\\/g, "");
 
       setAiResponse(cleanText);
-    } catch (e: any) {
-      setAiResponse(`Gagal memproses AI: ${e.message}`);
+    } catch (e: unknown) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      setAiResponse(`Gagal memproses AI: ${errMsg}`);
     } finally {
       setLoadingAi(false);
     }
@@ -286,10 +532,10 @@ export default function MetarTableTab() {
         backgroundColor: "#ffffff",
       });
       const link = document.createElement("a");
-      link.download = `METAR_Table_${Date.now()}.jpg`;
+      link.download = `Data_Cuaca_${Date.now()}.jpg`;
       link.href = dataUrl;
       link.click();
-    } catch (error) {
+    } catch {
       showToastMsg("⚠️ Gagal generate JPG.");
     }
   };
@@ -305,7 +551,7 @@ export default function MetarTableTab() {
       link.download = `Dashboard_Angin_Vis_${Date.now()}.jpg`;
       link.href = dataUrl;
       link.click();
-    } catch (error) {
+    } catch {
       showToastMsg("⚠️ Gagal generate JPG Dashboard.");
     }
   };
@@ -357,15 +603,55 @@ export default function MetarTableTab() {
         <textarea
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
-          placeholder="Paste data METAR di sini..."
+          placeholder="Paste data METAR / SPECI di sini (wajib mencantumkan kode ICAO 4 huruf)..."
           className="w-full h-36 p-3 text-sm font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50/50"
         />
+        {detectedStation && (
+          <div
+            className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg border ${
+              detectedStation.missingIcao
+                ? "text-rose-700 bg-rose-50 border-rose-200"
+                : "text-slate-600 bg-slate-50 border-slate-200"
+            }`}
+          >
+            <MapPin
+              size={14}
+              className={`shrink-0 ${
+                detectedStation.missingIcao ? "text-rose-600" : "text-blue-600"
+              }`}
+            />
+            {detectedStation.missingIcao ? (
+              <span>
+                <span className="font-bold">Peringatan:</span> Kode ICAO
+                stasiun/bandara belum terdeteksi pada baris pertama.
+              </span>
+            ) : detectedStation.found ? (
+              <span>
+                Terdeteksi:{" "}
+                <span className="font-bold text-slate-800">
+                  Bandara {detectedStation.bandara} ({detectedStation.icao})
+                </span>
+                {detectedStation.stasiun
+                  ? ` — Stamet ${detectedStation.stasiun}`
+                  : ""}
+              </span>
+            ) : (
+              <span>
+                Kode ICAO terdeteksi:{" "}
+                <span className="font-bold text-slate-800">
+                  {detectedStation.icao}
+                </span>{" "}
+                (belum terdaftar di master stasiun)
+              </span>
+            )}
+          </div>
+        )}
         <div className="flex gap-3">
           <button
             onClick={handleGenerate}
             className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-md transition-all"
           >
-            🚀 Generate Tabel
+            Generate Tabel
           </button>
           <button
             onClick={() => {
@@ -384,16 +670,32 @@ export default function MetarTableTab() {
       {processedRows.length > 0 && (
         <>
           <div className="bg-slate-100/80 p-4 rounded-xl border border-slate-200 space-y-4">
-            <div className="flex flex-wrap items-center gap-6 border-b border-slate-200 pb-3">
-              <label className="flex items-center gap-2 cursor-pointer text-sm font-bold text-slate-700 bg-white px-4 py-2 rounded-lg shadow-sm border border-slate-200">
-                <input
-                  type="checkbox"
-                  checked={showWita}
-                  onChange={() => setShowWita(!showWita)}
-                  className="rounded text-blue-600 w-4 h-4"
-                />{" "}
-                Waktu WITA
-              </label>
+            <div className="flex flex-wrap items-center gap-4 border-b border-slate-200 pb-3">
+              {/* Pilihan Zona Waktu: UTC, WIB, WITA, WIT */}
+              <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg shadow-sm border border-slate-200">
+                <Clock size={15} className="text-blue-600 shrink-0" />
+                <span className="text-xs font-bold text-slate-600 mr-1">
+                  Zona Waktu:
+                </span>
+                <div className="flex gap-1">
+                  {(["UTC", "WIB", "WITA", "WIT"] as TimezoneOption[]).map(
+                    (tz) => (
+                      <button
+                        key={tz}
+                        type="button"
+                        onClick={() => setTimezone(tz)}
+                        className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                          timezone === tz
+                            ? "bg-blue-600 text-white shadow-sm"
+                            : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                        }`}
+                      >
+                        {tz}
+                      </button>
+                    ),
+                  )}
+                </div>
+              </div>
 
               <div className="flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2 cursor-pointer text-sm font-bold text-slate-700 bg-white px-4 py-2 rounded-lg shadow-sm border border-slate-200">
@@ -440,20 +742,22 @@ export default function MetarTableTab() {
             </div>
 
             <div className="flex flex-wrap gap-2 text-xs">
-              {Object.keys(visibleColumns).map((col) => (
+              {(
+                Object.keys(visibleColumns) as Array<
+                  keyof typeof visibleColumns
+                >
+              ).map((col) => (
                 <label
                   key={col}
                   className="flex items-center gap-1.5 cursor-pointer bg-white px-3 py-1.5 rounded-md shadow-sm"
                 >
                   <input
                     type="checkbox"
-                    checked={visibleColumns[col as keyof typeof visibleColumns]}
-                    onChange={() =>
-                      toggleColumn(col as keyof typeof visibleColumns)
-                    }
+                    checked={visibleColumns[col]}
+                    onChange={() => toggleColumn(col)}
                     className="rounded text-blue-600"
                   />
-                  <span className="capitalize text-slate-700">{col}</span>
+                  <span className="text-slate-700">{columnLabels[col]}</span>
                 </label>
               ))}
             </div>
@@ -482,7 +786,7 @@ export default function MetarTableTab() {
               className="p-6 rounded-xl shadow-md border border-slate-200 min-w-max"
             >
               <h3 className="text-center font-extrabold text-xl mb-1 text-slate-800">
-                Data METAR Bandara APT Pranoto (WALS)
+                {tableHeaderTitle}
               </h3>
               <p className="text-center text-blue-600 font-bold mb-5 text-sm">
                 {titleDateStr}
@@ -499,7 +803,7 @@ export default function MetarTableTab() {
                     <th className="p-3 border border-slate-200 whitespace-nowrap">
                       Waktu{" "}
                       <span className="text-xs text-blue-600">
-                        {showWita ? "(WITA)" : "(UTC)"}
+                        ({timezone})
                       </span>
                     </th>
                     {visibleColumns.angin && (
@@ -528,6 +832,11 @@ export default function MetarTableTab() {
                     )}
                     {visibleColumns.qnh && (
                       <th className="p-3 border border-slate-200">QNH</th>
+                    )}
+                    {visibleColumns.recentWeather && (
+                      <th className="p-3 border border-slate-200">
+                        Recent Weather
+                      </th>
                     )}
                     {visibleColumns.trend && (
                       <th className="p-3 border border-slate-200">Trend</th>
@@ -573,6 +882,15 @@ export default function MetarTableTab() {
                       else if (!cuacaStr.includes("Asap")) cuacaStr += ", Asap";
                     }
 
+                    const formattedClouds =
+                      data.cloudTokens.length > 0
+                        ? data.cloudTokens.map(formatCloudForTable).join(", ")
+                        : "-";
+
+                    const formattedRecentWx = formatRecentWeather(
+                      data.recentWxTokens,
+                    );
+
                     return (
                       <tr
                         key={idx}
@@ -615,7 +933,7 @@ export default function MetarTableTab() {
                         )}
                         {visibleColumns.awan && (
                           <td className="p-3 border border-slate-200">
-                            {data.cloudTokens.join(", ") || "-"}
+                            {formattedClouds}
                           </td>
                         )}
                         {visibleColumns.suhu && (
@@ -626,6 +944,11 @@ export default function MetarTableTab() {
                         {visibleColumns.qnh && (
                           <td className="p-3 border border-slate-200">
                             {data.qnh ? `${data.qnh} hPa` : "-"}
+                          </td>
+                        )}
+                        {visibleColumns.recentWeather && (
+                          <td className="p-3 border border-slate-200">
+                            {formattedRecentWx}
                           </td>
                         )}
                         {visibleColumns.trend && (
@@ -643,6 +966,37 @@ export default function MetarTableTab() {
                   })}
                 </tbody>
               </table>
+
+              {/* Legend Minimalis Tutupan Awan & Cuaca */}
+              <div className="mt-4 pt-3 border-t border-slate-200 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                <span className="font-bold text-slate-700 mr-1">
+                  Keterangan:
+                </span>
+                <span className="px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200">
+                  <span className="font-bold text-slate-800">FEW</span> = 1-2
+                  Oktas
+                </span>
+                <span className="px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200">
+                  <span className="font-bold text-slate-800">SCT</span> = 3-4
+                  Oktas
+                </span>
+                <span className="px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200">
+                  <span className="font-bold text-slate-800">BKN</span> = 5-7
+                  Oktas
+                </span>
+                <span className="px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200">
+                  <span className="font-bold text-slate-800">OVC</span> = 8
+                  Oktas
+                </span>
+                <span className="px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200">
+                  <span className="font-bold text-slate-800">NSC</span> = Nil
+                  Significant Cloud
+                </span>
+                <span className="px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200">
+                  <span className="font-bold text-slate-800">NSW</span> = Nil
+                  Significant Weather
+                </span>
+              </div>
             </div>
           </div>
 
@@ -776,7 +1130,7 @@ export default function MetarTableTab() {
             ) : (
               <div className="text-slate-400 text-sm italic border-t border-slate-700 pt-4">
                 Klik tombol di atas untuk mendapatkan ringkasan kondisi cuaca
-                berdasarkan data METAR.
+                berdasarkan data METAR/SPECI.
               </div>
             )}
           </div>

@@ -1,5 +1,6 @@
 "use client";
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo } from "react";
+import { getStationByIcao } from "@/utils/stations";
 import {
   Copy,
   Check,
@@ -10,13 +11,108 @@ import {
   Bot,
   Edit,
   Save,
+  MapPin,
 } from "lucide-react";
 import { toJpeg } from "html-to-image";
+
+const getAirportName = (info: unknown): string => {
+  if (!info || typeof info !== "object") return "";
+  const record = info as Record<string, unknown>;
+
+  const direct =
+    record.nama_bandara ||
+    record.namaBandara ||
+    record.bandar_udara ||
+    record.bandarUdara ||
+    record.bandara ||
+    record.airport ||
+    record.airport_name ||
+    record.airportName ||
+    record.nama ||
+    record.name;
+
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim();
+  }
+
+  for (const [key, val] of Object.entries(record)) {
+    if (
+      typeof val === "string" &&
+      val.trim() &&
+      !/^[A-Z]{4}$/.test(val.trim()) &&
+      !key.toLowerCase().includes("stasiun") &&
+      !key.toLowerCase().includes("station") &&
+      !key.toLowerCase().includes("wmo")
+    ) {
+      return val.trim();
+    }
+  }
+
+  return "";
+};
+
+const getStationName = (info: unknown): string => {
+  if (!info || typeof info !== "object") return "";
+  const record = info as Record<string, unknown>;
+
+  const direct =
+    record.nama_stasiun ||
+    record.namaStasiun ||
+    record.stasiun_meteorologi ||
+    record.stasiunMeteorologi ||
+    record.stasiun ||
+    record.station ||
+    record.station_name ||
+    record.stationName;
+
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim();
+  }
+
+  for (const [key, val] of Object.entries(record)) {
+    if (
+      typeof val === "string" &&
+      val.trim() &&
+      (key.toLowerCase().includes("stasiun") ||
+        key.toLowerCase().includes("station"))
+    ) {
+      return val.trim();
+    }
+  }
+
+  return "";
+};
+
+const extractTafIcaoCode = (rawText: string): string => {
+  const clean = rawText.replace(/=/g, "").trim().toUpperCase();
+  const tafMatch = clean.match(/\bTAF(?:\s+(?:AMD|COR|RTD))?\s+([A-Z]{4})\b/);
+  if (tafMatch && tafMatch[1]) {
+    return tafMatch[1];
+  }
+
+  const tokens = clean.split(/\s+/);
+  const ignoreTokens = new Set(["TAF", "AMD", "COR", "RTD", "NIL", "CNL"]);
+  for (const t of tokens) {
+    if (/^\d{6}Z$/.test(t) || /^\d{4}\/\d{4}$/.test(t)) {
+      break;
+    }
+    if (ignoreTokens.has(t) || /^[A-Z]{4}\d{2}$/.test(t)) continue;
+    if (/^[A-Z]{4}$/.test(t)) {
+      return t;
+    }
+  }
+  return "";
+};
 
 export default function TafTableTab() {
   const [inputText, setInputText] = useState("");
   const [tableRows, setTableRows] = useState<any[]>([]);
   const [rawTafHeader, setRawTafHeader] = useState("");
+  const [activeStationInfo, setActiveStationInfo] = useState<{
+    icao: string;
+    bandara: string;
+    stasiun: string;
+  } | null>(null);
 
   const [copied, setCopied] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -35,6 +131,33 @@ export default function TafTableTab() {
     setToast(msg);
     setTimeout(() => setToast(null), 3000);
   };
+
+  // Deteksi otomatis info bandara & stasiun dari teks TAF
+  const detectedStation = useMemo(() => {
+    if (!inputText.trim()) return null;
+    const code = extractTafIcaoCode(inputText.trim());
+    if (!code) {
+      return {
+        icao: "",
+        bandara: "",
+        stasiun: "",
+        found: false,
+        missingIcao: true,
+      };
+    }
+
+    const info = getStationByIcao(code);
+    const bandara = getAirportName(info);
+    const stasiun = getStationName(info);
+
+    return {
+      icao: code,
+      bandara,
+      stasiun,
+      found: Boolean(info && bandara),
+      missingIcao: false,
+    };
+  }, [inputText]);
 
   const getBmkgIconUrl = (wx: string, cld: string) => {
     let wxStr = (wx || "").toUpperCase();
@@ -69,6 +192,31 @@ export default function TafTableTab() {
       return;
     }
 
+    const stationCode = extractTafIcaoCode(inputText.trim());
+    if (!stationCode) {
+      showToastMsg(
+        "⚠️ Kode ICAO stasiun tidak ditemukan! Wajib cantumkan 4 huruf kode ICAO.",
+      );
+      return;
+    }
+
+    const stationInfo = getStationByIcao(stationCode);
+    const airportName = getAirportName(stationInfo);
+    const stationName = getStationName(stationInfo);
+
+    if (!stationInfo || !airportName) {
+      showToastMsg(
+        `⚠️ Kode ICAO "${stationCode}" tidak terdaftar di database stations.ts!`,
+      );
+      return;
+    }
+
+    setActiveStationInfo({
+      icao: stationCode,
+      bandara: airportName,
+      stasiun: stationName,
+    });
+
     setRawTafHeader(inputText.trim());
     const tokens = inputText.replace(/=/g, "").trim().split(/\s+/);
     let baseStart = "",
@@ -81,6 +229,7 @@ export default function TafTableTab() {
       D: "",
       E: "",
       F: "",
+      rawClouds: [],
     };
     let changeGroups: any[] = [];
     let currentGroup = baseWeather;
@@ -108,6 +257,7 @@ export default function TafTableTab() {
           D: "",
           E: "",
           F: "",
+          rawClouds: [],
           changes: [],
         };
         changeGroups.push(currentGroup);
@@ -137,13 +287,26 @@ export default function TafTableTab() {
         // Cegah penimpaan (overwrite) jika awan sebelumnya di grup ini sudah CB/TCU
         // dan awan yang sedang dibaca saat ini BUKAN CB/TCU
         if (currentGroup.isConvective && !isConvective) {
-          // Skip, pertahankan data awan CB/TCU
+          // Skip, pertahankan data awan CB/TCU untuk tabel
         } else {
           currentGroup.E = cloudMatch[1];
           currentGroup.F = (parseInt(cloudMatch[2], 10) * 100).toString();
+          currentGroup.hasCloud = true;
           if (isConvective) currentGroup.isConvective = true; // Tandai bahwa ada awan prioritas
         }
 
+        // Simpan semua grup awan mentah khusus untuk tampilan visualisasi TAF
+        currentGroup.rawClouds.push(t);
+
+        if (currentGroup.type && !currentGroup.changes.includes("CLD"))
+          currentGroup.changes.push("CLD");
+        continue;
+      }
+      if (t === "NSC") {
+        currentGroup.E = "NSC";
+        currentGroup.F = "";
+        currentGroup.hasCloud = true;
+        currentGroup.rawClouds = ["NSC"];
         if (currentGroup.type && !currentGroup.changes.includes("CLD"))
           currentGroup.changes.push("CLD");
         continue;
@@ -223,7 +386,10 @@ export default function TafTableTab() {
     }
 
     let current = new Date(startObj);
-    let prevailingWx = { ...baseWeather };
+    let prevailingWx = {
+      ...baseWeather,
+      rawClouds: [...(baseWeather.rawClouds || [])],
+    };
     let rows: any[] = [];
 
     while (current <= endObj) {
@@ -239,12 +405,18 @@ export default function TafTableTab() {
             if (cg.C) prevailingWx.C = cg.C;
             if (cg.D !== undefined) prevailingWx.D = cg.D;
             if (cg.E) prevailingWx.E = cg.E;
-            if (cg.F) prevailingWx.F = cg.F;
+            if (cg.F || cg.hasCloud) prevailingWx.F = cg.F;
+            if (cg.hasCloud) {
+              prevailingWx.rawClouds = [...(cg.rawClouds || [])];
+            }
           }
         }
       }
 
-      let activeWx = { ...prevailingWx };
+      let activeWx = {
+        ...prevailingWx,
+        rawClouds: [...(prevailingWx.rawClouds || [])],
+      };
       let currentType = "GENERAL";
       let currentActiveCg = null;
 
@@ -258,7 +430,10 @@ export default function TafTableTab() {
             if (cg.C) activeWx.C = cg.C;
             if (cg.D !== undefined) activeWx.D = cg.D;
             if (cg.E) activeWx.E = cg.E;
-            if (cg.F) activeWx.F = cg.F;
+            if (cg.F || cg.hasCloud) activeWx.F = cg.F;
+            if (cg.hasCloud) {
+              activeWx.rawClouds = [...(cg.rawClouds || [])];
+            }
           }
         }
       }
@@ -342,6 +517,12 @@ export default function TafTableTab() {
     }
   };
 
+  const formattedAirportHeader = activeStationInfo
+    ? activeStationInfo.bandara.toLowerCase().startsWith("bandara ")
+      ? `${activeStationInfo.bandara} (${activeStationInfo.icao})`
+      : `Bandara ${activeStationInfo.bandara} (${activeStationInfo.icao})`
+    : "";
+
   return (
     <div className="space-y-6 relative animate-in fade-in zoom-in-95 duration-300">
       {toast && (
@@ -359,17 +540,56 @@ export default function TafTableTab() {
           placeholder="Paste TAF di sini..."
           className="w-full h-28 p-3 text-sm font-mono border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-slate-50/50"
         />
+        {detectedStation && (
+          <div
+            className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg border ${
+              detectedStation.found
+                ? "text-slate-600 bg-slate-50 border-slate-200"
+                : "text-rose-700 bg-rose-50 border-rose-200"
+            }`}
+          >
+            <MapPin
+              size={14}
+              className={`shrink-0 ${
+                detectedStation.found ? "text-blue-600" : "text-rose-600"
+              }`}
+            />
+            {detectedStation.missingIcao ? (
+              <span>
+                <span className="font-bold">Error:</span> Kode ICAO bandara
+                belum ditemukan pada sandi TAF.
+              </span>
+            ) : detectedStation.found ? (
+              <span>
+                Terdeteksi:{" "}
+                <span className="font-bold text-slate-800">
+                  Bandara {detectedStation.bandara} ({detectedStation.icao})
+                </span>
+                {detectedStation.stasiun
+                  ? ` — Stamet ${detectedStation.stasiun}`
+                  : ""}
+              </span>
+            ) : (
+              <span>
+                <span className="font-bold">Error:</span> Kode ICAO{" "}
+                <span className="font-bold">{detectedStation.icao}</span> tidak
+                terdaftar di master stasiun (stations.ts).
+              </span>
+            )}
+          </div>
+        )}
         <div className="flex gap-3">
           <button
             onClick={processTAF}
             className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-md transition-all active:scale-95"
           >
-            🚀 Generate Tabel Verifikasi TAF
+            Generate Tabel Verifikasi TAF
           </button>
           <button
             onClick={() => {
               setInputText("");
               setTableRows([]);
+              setActiveStationInfo(null);
               setShowVis(false);
               setAiResponse("");
             }}
@@ -414,6 +634,11 @@ export default function TafTableTab() {
               style={{ backgroundColor: "#ffffff" }}
               className="min-w-max p-2"
             >
+              {formattedAirportHeader && (
+                <div className="text-center font-bold text-sm text-slate-800 mb-2">
+                  Tabel Verifikasi TAF — {formattedAirportHeader}
+                </div>
+              )}
               <table className="w-full text-xs text-left border-collapse border border-slate-300">
                 <thead className="bg-lime-500 text-slate-900 font-bold">
                   <tr>
@@ -518,6 +743,11 @@ export default function TafTableTab() {
                   <h2 className="text-xl font-extrabold uppercase tracking-wide">
                     AERODROME FORECAST
                   </h2>
+                  {formattedAirportHeader && (
+                    <p className="text-sm font-bold uppercase text-slate-800">
+                      {formattedAirportHeader}
+                    </p>
+                  )}
                   <p className="text-sm font-mono text-slate-700 max-w-4xl mx-auto">
                     {rawTafHeader}
                   </p>
@@ -557,7 +787,11 @@ export default function TafTableTab() {
                           </div>
 
                           <div className="pt-1">
-                            {r.E && r.F ? `${r.E}${r.F}` : "NSC"}
+                            {r.rawClouds && r.rawClouds.length > 0
+                              ? r.rawClouds.join(" ")
+                              : r.E && r.F
+                                ? `${r.E}${r.F}`
+                                : "NSC"}
                           </div>
                         </div>
                       </div>
