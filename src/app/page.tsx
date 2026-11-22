@@ -4,6 +4,7 @@ import {
   TableProperties,
   FileText,
   CloudRain,
+  ClipboardCheck,
   Lock,
   ArrowRight,
   ShieldCheck,
@@ -12,6 +13,7 @@ import {
 import MetarTableTab from "@/components/MetarTableTab";
 import MetarReportTab from "@/components/MetarReportTab";
 import TafTableTab from "@/components/TafTableTab";
+import TafVerificationTab from "@/components/TafVerificationTab";
 
 export default function Home() {
   // State Autentikasi
@@ -115,7 +117,7 @@ export default function Home() {
   // ---------------------------------------------------------
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-100 via-blue-50 to-slate-200 text-slate-800 font-sans p-3 md:p-8 relative">
-      <header className="max-w-6xl mx-auto mb-6 text-center pt-2 md:pt-0">
+      <header className="max-w-7xl mx-auto mb-6 text-center pt-2 md:pt-0">
         <h1 className="text-2xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-700 to-cyan-600 mb-2">
           METAF Smart Converter
         </h1>
@@ -124,12 +126,12 @@ export default function Home() {
         </p>
       </header>
 
-      <main className="max-w-6xl mx-auto bg-white/70 backdrop-blur-md border border-white shadow-xl rounded-2xl overflow-hidden mb-16 md:mb-0">
+      <main className="max-w-7xl mx-auto bg-white/70 backdrop-blur-md border border-white shadow-xl rounded-2xl overflow-hidden mb-16 md:mb-0">
         {/* Navigation Tabs */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 border-b border-slate-200 bg-slate-50/50">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 border-b border-slate-200 bg-slate-50/50">
           <button
             onClick={() => setActiveTab("METAR_TABLE")}
-            className={`py-4 px-4 flex items-center justify-center gap-2 font-bold text-sm transition-all border-b sm:border-b-0 sm:border-r border-slate-200 ${
+            className={`py-4 px-4 flex items-center justify-center gap-2 font-bold text-sm transition-all border-b lg:border-b-0 sm:border-r border-slate-200 cursor-pointer ${
               activeTab === "METAR_TABLE"
                 ? "bg-blue-600 text-white shadow-inner"
                 : "text-slate-600 hover:bg-slate-100"
@@ -139,7 +141,7 @@ export default function Home() {
           </button>
           <button
             onClick={() => setActiveTab("METAR_REPORT")}
-            className={`py-4 px-4 flex items-center justify-center gap-2 font-bold text-sm transition-all border-b sm:border-b-0 sm:border-r border-slate-200 ${
+            className={`py-4 px-4 flex items-center justify-center gap-2 font-bold text-sm transition-all border-b lg:border-b-0 lg:border-r border-slate-200 cursor-pointer ${
               activeTab === "METAR_REPORT"
                 ? "bg-blue-600 text-white shadow-inner"
                 : "text-slate-600 hover:bg-slate-100"
@@ -149,13 +151,23 @@ export default function Home() {
           </button>
           <button
             onClick={() => setActiveTab("TAF_TABLE")}
-            className={`py-4 px-4 flex items-center justify-center gap-2 font-bold text-sm transition-all ${
+            className={`py-4 px-4 flex items-center justify-center gap-2 font-bold text-sm transition-all border-b sm:border-b-0 sm:border-r border-slate-200 cursor-pointer ${
               activeTab === "TAF_TABLE"
                 ? "bg-blue-600 text-white shadow-inner"
                 : "text-slate-600 hover:bg-slate-100"
             }`}
           >
             <CloudRain size={18} /> TAF to Table
+          </button>
+          <button
+            onClick={() => setActiveTab("TAF_VERIFICATION")}
+            className={`py-4 px-4 flex items-center justify-center gap-2 font-bold text-sm transition-all cursor-pointer ${
+              activeTab === "TAF_VERIFICATION"
+                ? "bg-blue-600 text-white shadow-inner"
+                : "text-slate-600 hover:bg-slate-100"
+            }`}
+          >
+            <ClipboardCheck size={18} /> Verifikasi TAF
           </button>
         </div>
 
@@ -164,6 +176,7 @@ export default function Home() {
           {activeTab === "METAR_TABLE" && <MetarTableTab />}
           {activeTab === "METAR_REPORT" && <MetarReportTab />}
           {activeTab === "TAF_TABLE" && <TafTableTab />}
+          {activeTab === "TAF_VERIFICATION" && <TafVerificationTab />}
         </div>
       </main>
 
