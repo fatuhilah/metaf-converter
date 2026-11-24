@@ -1178,53 +1178,6 @@ export default function TafVerificationTab() {
                             {activeMonthlyRecap.monthlyAverage &&
                               monthlyOverallAverage !== null && (
                                 <>
-                                  <tr className="bg-yellow-300 font-extrabold text-slate-900 text-right">
-                                    <td
-                                      colSpan={3}
-                                      className="border border-slate-400 p-2 text-right pr-3"
-                                    >
-                                      RATA-RATA TIAP UNSUR (%)
-                                    </td>
-                                    <td className="border border-slate-400 p-2 font-mono">
-                                      {activeMonthlyRecap.monthlyAverage.arahAngin.toFixed(
-                                        2,
-                                      )}
-                                    </td>
-                                    <td className="border border-slate-400 p-2 font-mono">
-                                      {activeMonthlyRecap.monthlyAverage.kecepatanAngin.toFixed(
-                                        2,
-                                      )}
-                                    </td>
-                                    <td className="border border-slate-400 p-2 font-mono">
-                                      {activeMonthlyRecap.monthlyAverage.gusty.toFixed(
-                                        2,
-                                      )}
-                                    </td>
-                                    <td className="border border-slate-400 p-2 font-mono">
-                                      {activeMonthlyRecap.monthlyAverage.visibilitas.toFixed(
-                                        2,
-                                      )}
-                                    </td>
-                                    <td className="border border-slate-400 p-2 font-mono">
-                                      {activeMonthlyRecap.monthlyAverage.presipitasi.toFixed(
-                                        2,
-                                      )}
-                                    </td>
-                                    <td className="border border-slate-400 p-2 font-mono">
-                                      {activeMonthlyRecap.monthlyAverage.jumlahAwan.toFixed(
-                                        2,
-                                      )}
-                                    </td>
-                                    <td className="border border-slate-400 p-2 font-mono">
-                                      {activeMonthlyRecap.monthlyAverage.tinggiAwan.toFixed(
-                                        2,
-                                      )}
-                                    </td>
-                                    <td className="border border-slate-400 p-2 font-mono">
-                                      {monthlyOverallAverage.toFixed(2)}
-                                    </td>
-                                  </tr>
-
                                   {/* Baris Bawah 2: Rata-rata Keseluruhan Bulan */}
                                   <tr className="bg-emerald-100 font-extrabold text-emerald-950">
                                     <td

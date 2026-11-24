@@ -1562,7 +1562,7 @@ function buildMonthlyRecapWorksheet(
     });
     rowsMeta.push({ hpt: 22 });
 
-    const overallRowIdx = bottomAvgRowIdx + 1;
+    const overallRowIdx = 6 + mr.items.length;
     const overallMonthRow: StyledCell[] = Array.from({ length: 11 }, (_, c) => {
       if (c === 0) {
         return makeCell(
@@ -1573,7 +1573,7 @@ function buildMonthlyRecapWorksheet(
       if (c === 3) {
         return makeCell(monthlyOverallVal, emeraldCenterValStyle, {
           t: "n",
-          f: `IFERROR(AVERAGE(D${bottomAvgExcelRow}:J${bottomAvgExcelRow}), 0)`,
+          f: `IFERROR(AVERAGE(D6:J6), 0)`,
           z: '0.00"%"',
         });
       }
