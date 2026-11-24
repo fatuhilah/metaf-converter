@@ -9,11 +9,13 @@ import {
   ArrowRight,
   ShieldCheck,
   LogOut,
+  BarChart4,
 } from "lucide-react";
 import MetarTableTab from "@/components/MetarTableTab";
 import MetarReportTab from "@/components/MetarReportTab";
 import TafTableTab from "@/components/TafTableTab";
 import TafVerificationTab from "@/components/TafVerificationTab";
+import AcsTab from "@/components/AcsTab";
 
 export default function Home() {
   // State Autentikasi
@@ -128,46 +130,56 @@ export default function Home() {
 
       <main className="max-w-7xl mx-auto bg-white/70 backdrop-blur-md border border-white shadow-xl rounded-2xl overflow-hidden mb-16 md:mb-0">
         {/* Navigation Tabs */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 border-b border-slate-200 bg-slate-50/50">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 border-b border-slate-200 bg-slate-50/50">
           <button
             onClick={() => setActiveTab("METAR_TABLE")}
-            className={`py-4 px-4 flex items-center justify-center gap-2 font-bold text-sm transition-all border-b lg:border-b-0 sm:border-r border-slate-200 cursor-pointer ${
+            className={`py-4 px-3 flex items-center justify-center gap-1.5 font-bold text-[13px] transition-all border-b md:border-b-0 border-r border-slate-200 cursor-pointer ${
               activeTab === "METAR_TABLE"
                 ? "bg-blue-600 text-white shadow-inner"
                 : "text-slate-600 hover:bg-slate-100"
             }`}
           >
-            <TableProperties size={18} /> METAR to Table
+            <TableProperties size={16} /> METAR to Table
           </button>
           <button
             onClick={() => setActiveTab("METAR_REPORT")}
-            className={`py-4 px-4 flex items-center justify-center gap-2 font-bold text-sm transition-all border-b lg:border-b-0 lg:border-r border-slate-200 cursor-pointer ${
+            className={`py-4 px-3 flex items-center justify-center gap-1.5 font-bold text-[13px] transition-all border-b md:border-b-0 md:border-r lg:border-r border-slate-200 cursor-pointer ${
               activeTab === "METAR_REPORT"
                 ? "bg-blue-600 text-white shadow-inner"
                 : "text-slate-600 hover:bg-slate-100"
             }`}
           >
-            <FileText size={18} /> MET REPORT
+            <FileText size={16} /> MET REPORT
           </button>
           <button
             onClick={() => setActiveTab("TAF_TABLE")}
-            className={`py-4 px-4 flex items-center justify-center gap-2 font-bold text-sm transition-all border-b sm:border-b-0 sm:border-r border-slate-200 cursor-pointer ${
+            className={`py-4 px-3 flex items-center justify-center gap-1.5 font-bold text-[13px] transition-all border-b sm:border-b-0 border-r border-slate-200 cursor-pointer ${
               activeTab === "TAF_TABLE"
                 ? "bg-blue-600 text-white shadow-inner"
                 : "text-slate-600 hover:bg-slate-100"
             }`}
           >
-            <CloudRain size={18} /> TAF to Table
+            <CloudRain size={16} /> TAF to Table
           </button>
           <button
             onClick={() => setActiveTab("TAF_VERIFICATION")}
-            className={`py-4 px-4 flex items-center justify-center gap-2 font-bold text-sm transition-all cursor-pointer ${
+            className={`py-4 px-3 flex items-center justify-center gap-1.5 font-bold text-[13px] transition-all border-r border-slate-200 cursor-pointer ${
               activeTab === "TAF_VERIFICATION"
                 ? "bg-blue-600 text-white shadow-inner"
                 : "text-slate-600 hover:bg-slate-100"
             }`}
           >
-            <ClipboardCheck size={18} /> Verifikasi TAF
+            <ClipboardCheck size={16} /> Verifikasi TAF
+          </button>
+          <button
+            onClick={() => setActiveTab("ACS_CLIMATOLOGY")}
+            className={`py-4 px-3 flex items-center justify-center gap-1.5 font-bold text-[13px] transition-all cursor-pointer ${
+              activeTab === "ACS_CLIMATOLOGY"
+                ? "bg-blue-600 text-white shadow-inner"
+                : "text-slate-600 hover:bg-slate-100"
+            }`}
+          >
+            <BarChart4 size={16} /> ACS (Klimatologi)
           </button>
         </div>
 
@@ -177,6 +189,7 @@ export default function Home() {
           {activeTab === "METAR_REPORT" && <MetarReportTab />}
           {activeTab === "TAF_TABLE" && <TafTableTab />}
           {activeTab === "TAF_VERIFICATION" && <TafVerificationTab />}
+          {activeTab === "ACS_CLIMATOLOGY" && <AcsTab />}
         </div>
       </main>
 
