@@ -1651,38 +1651,39 @@ export function exportAcsExcelWorkbook(
     return ws;
   };
 
+  // Susun tab Excel: Dengan RVR = lengkap Model A, B, C, D, E; Tanpa RVR = Model B, C, D, E
   if (hasRvr) {
     XLSX.utils.book_append_sheet(
       wb,
       buildModelASheet(),
       "MODEL A (RVR-VIS-HS)",
     );
-  } else {
-    XLSX.utils.book_append_sheet(
-      wb,
-      buildCumulativeSheet(
-        "B",
-        "FREQUENCIES (PER CENT) OF VISIBILITY BELOW SPECIFIED VALUES (IN METRES) AT SPECIFIED TIMES",
-        "VISIBILITY",
-        MODEL_B_HEADERS,
-        mData.modelB_Freq,
-        mData.remarksModelB,
-      ),
-      "MODEL B (VISIBILITY)",
-    );
-    XLSX.utils.book_append_sheet(
-      wb,
-      buildCumulativeSheet(
-        "C",
-        "FREQUENCIES (PER CENT) OF THE HEIGHT OF THE BASE OF THE LOWEST CLOUD LAYER (FEET) OF BKN OR OVC EXTENT BELOW SPECIFIED VALUES AT SPECIFIED TIMES",
-        "Hs",
-        MODEL_C_HEADERS,
-        mData.modelC_Freq,
-        mData.remarksModelC,
-      ),
-      "MODEL C (CLOUD BASE)",
-    );
   }
+
+  XLSX.utils.book_append_sheet(
+    wb,
+    buildCumulativeSheet(
+      "B",
+      "FREQUENCIES (PER CENT) OF VISIBILITY BELOW SPECIFIED VALUES (IN METRES) AT SPECIFIED TIMES",
+      "VISIBILITY",
+      MODEL_B_HEADERS,
+      mData.modelB_Freq,
+      mData.remarksModelB,
+    ),
+    "MODEL B (VISIBILITY)",
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    buildCumulativeSheet(
+      "C",
+      "FREQUENCIES (PER CENT) OF THE HEIGHT OF THE BASE OF THE LOWEST CLOUD LAYER (FEET) OF BKN OR OVC EXTENT BELOW SPECIFIED VALUES AT SPECIFIED TIMES",
+      "Hs",
+      MODEL_C_HEADERS,
+      mData.modelC_Freq,
+      mData.remarksModelC,
+    ),
+    "MODEL C (CLOUD BASE)",
+  );
 
   XLSX.utils.book_append_sheet(wb, buildModelDSheet(), "MODEL D (WIND)");
   XLSX.utils.book_append_sheet(wb, buildModelESheet(), "MODEL E (TEMP)");
