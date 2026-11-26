@@ -13,12 +13,14 @@ import {
   Eye,
   EyeOff,
   ClockAlert,
+  BrainCircuit,
 } from "lucide-react";
 import MetarTableTab from "@/components/MetarTableTab";
 import MetarReportTab from "@/components/MetarReportTab";
 import TafTableTab from "@/components/TafTableTab";
 import TafVerificationTab from "@/components/TafVerificationTab";
 import AcsTab from "@/components/AcsTab";
+import MachineLearningTab from "@/components/MachineLearningTab";
 
 // Durasi sesi: 24 jam dalam milidetik
 const SESSION_DURATION_MS = 24 * 60 * 60 * 1000;
@@ -245,12 +247,13 @@ export default function Home() {
       {/* Kontainer Utama Warm Frosted Glass Transparan */}
       <main className="relative z-10 max-w-7xl mx-auto bg-stone-100/45 backdrop-blur-md border border-white/60 shadow-[0_24px_60px_rgba(15,23,42,0.32)] rounded-3xl overflow-hidden mb-16 md:mb-0">
         {/* Navigation Tabs Menyatu Penuh (Edge-to-Edge) dengan Sekat Garis Putih Tipis */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 border-b border-white/35 overflow-hidden">
+        {/* Navigation Tabs Menyatu Penuh (6 Menu) */}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 border-b border-white/35 overflow-hidden">
           <button
             onClick={() => setActiveTab("METAR_TABLE")}
             className={navTabStyle(
               "METAR_TABLE",
-              "border-b md:border-b-0 border-r border-white/35",
+              "border-b lg:border-b-0 border-r border-white/35",
             )}
           >
             <TableProperties size={16} /> METAR to Table
@@ -259,16 +262,16 @@ export default function Home() {
             onClick={() => setActiveTab("METAR_REPORT")}
             className={navTabStyle(
               "METAR_REPORT",
-              "border-b md:border-b-0 md:border-r lg:border-r border-white/35",
+              "border-b lg:border-b-0 md:border-r border-white/35",
             )}
           >
-            <FileText size={16} /> METAR to MET REPORT
+            <FileText size={16} /> MET REPORT
           </button>
           <button
             onClick={() => setActiveTab("TAF_TABLE")}
             className={navTabStyle(
               "TAF_TABLE",
-              "border-b sm:border-b-0 border-r border-white/35",
+              "border-b lg:border-b-0 border-r border-white/35",
             )}
           >
             <CloudRain size={16} /> TAF to Table
@@ -277,7 +280,7 @@ export default function Home() {
             onClick={() => setActiveTab("TAF_VERIFICATION")}
             className={navTabStyle(
               "TAF_VERIFICATION",
-              "border-r border-white/35",
+              "border-b md:border-b-0 md:border-r border-white/35",
             )}
           >
             <ClipboardCheck size={16} /> Verifikasi TAF
@@ -286,10 +289,16 @@ export default function Home() {
             onClick={() => setActiveTab("ACS_CLIMATOLOGY")}
             className={navTabStyle(
               "ACS_CLIMATOLOGY",
-              "col-span-2 md:col-span-1 border-t lg:border-t-0 border-white/35",
+              "border-r border-white/35",
             )}
           >
             <BarChart4 size={16} /> ACS
+          </button>
+          <button
+            onClick={() => setActiveTab("MACHINE_LEARNING")}
+            className={navTabStyle("MACHINE_LEARNING")}
+          >
+            <BrainCircuit size={16} /> Machine Learning
           </button>
         </div>
 
@@ -300,6 +309,7 @@ export default function Home() {
           {activeTab === "TAF_TABLE" && <TafTableTab />}
           {activeTab === "TAF_VERIFICATION" && <TafVerificationTab />}
           {activeTab === "ACS_CLIMATOLOGY" && <AcsTab />}
+          {activeTab === "MACHINE_LEARNING" && <MachineLearningTab />}
         </div>
       </main>
 
