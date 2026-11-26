@@ -98,8 +98,61 @@ function getDayOfYear(d: Date): number {
   return Math.floor((d.getTime() - start) / (1000 * 60 * 60 * 24));
 }
 
-// 16 fitur dasar (urutan persis sama dengan BASE_FEATURES di Google Colab)
-function extractBase16Features(r: HybridMetarRecord): number[] {
+function isSpeciReport(rawMetar: string): boolean {
+  return (rawMetar || "").trim().toUpperCase().startsWith("SPECI");
+}
+
+// Rumus Magnus-Tetens WMO untuk menghitung Relative Humidity (%) dari T dan Td (°C)
+function calcRelativeHumidity(tempC: number, dewC: number): number {
+  const es = Math.exp((17.625 * tempC) / (243.04 + tempC));
+  const e = Math.exp((17.625 * dewC) / (243.04 + dewC));
+  const rh = 100.0 * (e / (es === 0 ? 1e-6 : es));
+  return Math.min(100.0, Math.max(5.0, rh));
+}
+
+// Pencarian observasi berdasarkan selisih menit aktual (tahan sisipan SPECI di antara jam rutin)
+function findRecordNearMinutesAgo(
+  recordsAsc: HybridMetarRecord[],
+  endIdx: number,
+  minutesAgo: number,
+): HybridMetarRecord {
+  const anchorMs = new Date(recordsAsc[endIdx].obs_time).getTime();
+  const targetMs = anchorMs - minutesAgo * 60_000;
+
+  let bestIdx = Math.max(0, endIdx - Math.max(1, Math.round(minutesAgo / 30)));
+  let bestDiff = Infinity;
+
+  // Telusuri mundur hingga maksimal 16 observasi ke belakang
+  const minScan = Math.max(0, endIdx - 16);
+  for (let i = endIdx; i >= minScan; i--) {
+    const tMs = new Date(recordsAsc[i].obs_time).getTime();
+    if (Number.isNaN(tMs)) continue;
+    const diff = Math.abs(tMs - targetMs);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestIdx = i;
+    }
+    if (tMs < targetMs && diff > bestDiff) break;
+  }
+
+  return recordsAsc[bestIdx];
+}
+
+// Membentuk 6 langkah sekuensial seragam setiap 30 menit (t-150m .. t0) meski disisipi SPECI
+function buildTimeAlignedSequence6(
+  recordsAsc: HybridMetarRecord[],
+  endIdx: number,
+): HybridMetarRecord[] {
+  const stepOffsetsMin = [150, 120, 90, 60, 30, 0];
+  return stepOffsetsMin.map((minAgo) =>
+    minAgo === 0
+      ? recordsAsc[endIdx]
+      : findRecordNearMinutesAgo(recordsAsc, endIdx, minAgo),
+  );
+}
+
+// 17 fitur dasar (urutan persis sama dengan BASE_FEATURES di Google Colab)
+function extractBase17Features(r: HybridMetarRecord): number[] {
   const obsDate = new Date(r.obs_time);
   const hourFloat = obsDate.getUTCHours() + obsDate.getUTCMinutes() / 60.0;
   const doyFloat = getDayOfYear(obsDate);
@@ -127,6 +180,7 @@ function extractBase16Features(r: HybridMetarRecord): number[] {
     r.dewpoint_spread !== null
       ? Number(r.dewpoint_spread)
       : Number((tempC - dewC).toFixed(1));
+  const relHum = calcRelativeHumidity(tempC, dewC);
   const fsiIndex = 4.0 * spread + windSpeed;
   const qnhHpa = Number(r.qnh_hpa ?? 1010);
   const hasTsCb = r.has_ts || r.has_cb ? 1.0 : 0.0;
@@ -145,31 +199,38 @@ function extractBase16Features(r: HybridMetarRecord): number[] {
     tempC,
     dewC,
     spread,
+    relHum,
     fsiIndex,
     qnhHpa,
     hasTsCb,
   ];
 }
 
-// Susun Tensor [1, 24] untuk XGBoost & Random Forest (persis TABULAR_FEATURES di Colab)
-function buildTabular24Tensor(seq7: HybridMetarRecord[]): ort.Tensor {
-  const curr = seq7[seq7.length - 1];
-  const prev1h = seq7[seq7.length - 3];
-  const prev3h = seq7[0];
+// Susun Tensor [1, 27] berbasis stempel waktu aktual (tahan sisipan SPECI)
+function buildTabular27TensorAt(
+  recordsAsc: HybridMetarRecord[],
+  endIdx: number,
+): ort.Tensor {
+  const curr = recordsAsc[endIdx];
+  const prev1h = findRecordNearMinutesAgo(recordsAsc, endIdx, 60);
+  const prev3h = findRecordNearMinutesAgo(recordsAsc, endIdx, 180);
 
-  const base16 = extractBase16Features(curr);
-  const currTemp = base16[10];
-  const currSpread = base16[12];
-  const currQnh = base16[14];
-  const currVis = base16[8];
-  const currSpd = base16[6];
+  const base17 = extractBase17Features(curr);
+  const currTemp = base17[10];
+  const currSpread = base17[12];
+  const currRh = base17[13];
+  const currQnh = base17[15];
+  const currVis = base17[8];
+  const currSpd = base17[6];
 
   const p1Temp = Number(prev1h.temp_c ?? currTemp);
-  const p1Dew = Number(prev1h.dewpoint_c ?? base16[11]);
+  const p3Temp = Number(prev3h.temp_c ?? currTemp);
+  const p1Dew = Number(prev1h.dewpoint_c ?? base17[11]);
   const p1Spread =
     prev1h.dewpoint_spread !== null
       ? Number(prev1h.dewpoint_spread)
       : p1Temp - p1Dew;
+  const p1Rh = calcRelativeHumidity(p1Temp, p1Dew);
   const p1Qnh = Number(prev1h.qnh_hpa ?? currQnh);
   const p3Qnh = Number(prev3h.qnh_hpa ?? currQnh);
   const p1Vis = prev1h.visibility_m ?? currVis;
@@ -181,10 +242,12 @@ function buildTabular24Tensor(seq7: HybridMetarRecord[]): ort.Tensor {
   );
   const catIdx = CAT_TO_IDX[(curr.flight_category || "VFR").toUpperCase()] ?? 0;
 
-  const full24 = Float32Array.from([
-    ...base16,
+  const full27 = Float32Array.from([
+    ...base17,
     currTemp - p1Temp,
+    currTemp - p3Temp,
     currSpread - p1Spread,
+    currRh - p1Rh,
     currQnh - p1Qnh,
     currQnh - p3Qnh,
     currVis - p1Vis,
@@ -193,17 +256,21 @@ function buildTabular24Tensor(seq7: HybridMetarRecord[]): ort.Tensor {
     catIdx,
   ]);
 
-  return new ort.Tensor("float32", full24, [1, 24]);
+  return new ort.Tensor("float32", full27, [1, 27]);
 }
 
-// Susun Tensor Sekuensial [1, 6, 16] untuk PyTorch LSTM & 1D-CNN
-function buildSequence6x16Tensor(seq6: HybridMetarRecord[]): ort.Tensor {
-  const flat = new Float32Array(6 * 16);
+// Susun Tensor Sekuensial [1, 6, 17] dengan grid 30-menit selaras waktu (SPECI-proof)
+function buildSequence6x17TensorAt(
+  recordsAsc: HybridMetarRecord[],
+  endIdx: number,
+): ort.Tensor {
+  const aligned6 = buildTimeAlignedSequence6(recordsAsc, endIdx);
+  const flat = new Float32Array(6 * 17);
   for (let t = 0; t < 6; t++) {
-    const row16 = extractBase16Features(seq6[t]);
-    flat.set(row16, t * 16);
+    const row17 = extractBase17Features(aligned6[t]);
+    flat.set(row17, t * 17);
   }
-  return new ort.Tensor("float32", flat, [1, 6, 16]);
+  return new ort.Tensor("float32", flat, [1, 6, 17]);
 }
 
 async function fetchSession(
@@ -258,27 +325,29 @@ export async function runMultiEngineInference(params: {
 
   if (recordsAsc.length < 7) {
     throw new Error(
-      `Data ${icao} baru ${recordsAsc.length} baris. Minimal butuh 7 observasi terakhir (3 jam) untuk inferensi.`,
+      `Data ${icao} baru ${recordsAsc.length} baris. Minimal butuh 7 observasi terakhir untuk inferensi.`,
     );
   }
 
   const pfx = icao.toLowerCase();
   const comboLabel = formatCombinationTitle(activeEngines);
 
-  const seq7 = recordsAsc.slice(-7);
-  const seq6 = recordsAsc.slice(-6);
-  const curr = seq7[seq7.length - 1];
-  const prev1h = seq7[seq7.length - 3];
+  const endIdx = recordsAsc.length - 1;
+  const curr = recordsAsc[endIdx];
+  const prev1h = findRecordNearMinutesAgo(recordsAsc, endIdx, 60);
+  const prevObs = recordsAsc[Math.max(0, endIdx - 1)];
 
-  const tabTensor = buildTabular24Tensor(seq7);
-  const seqTensor = buildSequence6x16Tensor(seq6);
+  const tabTensor = buildTabular27TensorAt(recordsAsc, endIdx);
+  const seqTensor = buildSequence6x17TensorAt(recordsAsc, endIdx);
 
+  const isSpeciNow = isSpeciReport(curr.raw_metar);
   const currTemp = Number(curr.temp_c ?? 28);
   const currDew = Number(curr.dewpoint_c ?? 24);
   const currSpread =
     curr.dewpoint_spread !== null
       ? Number(curr.dewpoint_spread)
       : Number((currTemp - currDew).toFixed(1));
+  const currRh = Number(calcRelativeHumidity(currTemp, currDew).toFixed(0));
   const currQnh = Number(curr.qnh_hpa ?? 1010);
   const qnhDiff1h = Number(
     (currQnh - Number(prev1h.qnh_hpa ?? currQnh)).toFixed(1),
@@ -286,21 +355,24 @@ export async function runMultiEngineInference(params: {
   const currVis = curr.visibility_m ?? 9999;
   const currSpd = curr.wind_speed ?? 0;
   const fsiVal = Number((4.0 * currSpread + currSpd).toFixed(1));
-  const ceilLabel =
-    curr.lowest_ceiling_ft !== null && curr.lowest_ceiling_ft !== undefined
-      ? `${curr.lowest_ceiling_ft} ft`
-      : "No Ceiling";
 
   const baseIndicators = [
+    {
+      label: "Tipe Laporan",
+      value: isSpeciNow ? "SPECI (Special)" : "METAR (Rutin)",
+    },
+    { label: "Rel. Humidity (RH)", value: `${currRh}%` },
     { label: "Fog Stability (FSI)", value: `${fsiVal}` },
-    { label: "Dew-point Deficit", value: `${currSpread}°C` },
     {
       label: "QNH (Tren 1j)",
       value: `${currQnh} hPa (${qnhDiff1h >= 0 ? "+" : ""}${qnhDiff1h})`,
     },
-    { label: "Cloud Base", value: ceilLabel },
     { label: "Angin / Vis", value: `${currSpd} kt / ${currVis}m` },
   ];
+
+  const speciPrefixNote = isSpeciNow
+    ? "[Sandi SPECI Terdeteksi — Perubahan Cuaca Mendadak] "
+    : "";
 
   const runEngineRaw = async (eng: EngineKey) => {
     const filePrefixMap: Record<EngineKey, string> = {
@@ -331,8 +403,9 @@ export async function runMultiEngineInference(params: {
       const mm = String(d.getUTCMinutes()).padStart(2, "0");
       const val = extractor(r);
       const isLast = idx === recent.length - 1;
+      const speciTag = isSpeciReport(r.raw_metar) ? "*" : "";
       return {
-        timeLabel: `${hh}:${mm}Z`,
+        timeLabel: `${hh}:${mm}Z${speciTag}`,
         observed: val,
         xgbPred: isLast && preds.XGBOOST !== undefined ? val : null,
         rfPred: isLast && preds.RF !== undefined ? val : null,
@@ -395,11 +468,13 @@ export async function runMultiEngineInference(params: {
           ? "WASPADA (1.5–5 KM)"
           : "VFR (>5 KM)",
       badgeVariant: isPoor ? "rose" : isWarn ? "amber" : "emerald",
-      summary: isPoor
-        ? "Peringatan Jarak Pandang Rendah (IFR/LIFR): Berpotensi terjadi penurunan jarak pandang di bawah 1.500m akibat kabut, asap, atau hujan lebat."
-        : isWarn
-          ? "Waspada Marginal Visibility (MVFR): Terdeteksi potensi mist (BR), haze (HZ), atau hujan yang menurunkan jarak pandang ke 1.500–5.000m."
-          : "Jarak pandang diprakirakan tetap kondusif (>5.000 meter) dalam 1–3 jam ke depan.",
+      summary:
+        speciPrefixNote +
+        (isPoor
+          ? "Peringatan Jarak Pandang Rendah (IFR/LIFR): Berpotensi terjadi penurunan jarak pandang di bawah 1.500m akibat kabut, asap, atau hujan lebat."
+          : isWarn
+            ? "Waspada Marginal Visibility (MVFR): Terdeteksi potensi mist (BR), haze (HZ), atau hujan yang menurunkan jarak pandang ke 1.500–5.000m."
+            : "Jarak pandang diprakirakan tetap kondusif (>5.000 meter) dalam 1–3 jam ke depan."),
       engineBreakdown: breakdown,
       chartData: {
         title: `Observed and Estimated Visibility — ${icao} (${comboLabel})`,
@@ -476,17 +551,19 @@ export async function runMultiEngineInference(params: {
           ? "RISIKO SEDANG"
           : "RISIKO RENDAH",
       badgeVariant: isHigh ? "rose" : isMed ? "amber" : "emerald",
-      summary: isTs
-        ? isHigh
-          ? "Peringatan Dini Konvektif: Indikator tren tekanan, angin permukaan, dan kelembapan menunjukkan potensi tinggi pertumbuhan CB / TS."
-          : isMed
-            ? "Waspada Pertumbuhan Awan Konvektif: Terdeteksi peningkatan ketidakstabilan lokal. Pantau perkembangan awan TCU/CB."
-            : "Atmosfer permukaan relatif stabil. Peluang pertumbuhan awan CB/TS lokal dalam 1–3 jam ke depan rendah."
-        : isHigh
-          ? "Peringatan Pergeseran Angin / Gust: Terdeteksi dinamika vektor angin yang berpotensi memicu gust kencang atau pergeseran arah ≥45°."
-          : isMed
-            ? "Waspada Variasi Angin Permukaan: Berpotensi terjadi peningkatan kecepatan angin atau perubahan arah bertahap."
-            : "Aliran angin permukaan diprakirakan relatif stabil tanpa lonjakan gust signifikan.",
+      summary:
+        speciPrefixNote +
+        (isTs
+          ? isHigh
+            ? "Peringatan Dini Konvektif: Indikator tren tekanan, angin permukaan, dan kelembapan menunjukkan potensi tinggi pertumbuhan CB / TS."
+            : isMed
+              ? "Waspada Pertumbuhan Awan Konvektif: Terdeteksi peningkatan ketidakstabilan lokal. Pantau perkembangan awan TCU/CB."
+              : "Atmosfer permukaan relatif stabil. Peluang pertumbuhan awan CB/TS lokal dalam 1–3 jam ke depan rendah."
+          : isHigh
+            ? "Peringatan Pergeseran Angin / Gust: Terdeteksi dinamika vektor angin yang berpotensi memicu gust kencang atau pergeseran arah ≥45°."
+            : isMed
+              ? "Waspada Variasi Angin Permukaan: Berpotensi terjadi peningkatan kecepatan angin atau perubahan arah bertahap."
+              : "Aliran angin permukaan diprakirakan relatif stabil tanpa lonjakan gust signifikan."),
       engineBreakdown: breakdown,
       chartData: {
         title: isTs
@@ -577,9 +654,10 @@ export async function runMultiEngineInference(params: {
               ? "amber"
               : "emerald",
       summary:
-        bestCat === "VFR"
+        speciPrefixNote +
+        (bestCat === "VFR"
           ? "Operasi penerbangan diprakirakan tetap dalam kondisi Visual Flight Rules (VFR) tanpa penurunan ceiling signifikan."
-          : `Waspada Penurunan Kategori ke ${bestCat}: Terdeteksi potensi penurunan ceiling awan rendah atau jarak pandang dalam 1–3 jam ke depan.`,
+          : `Waspada Penurunan Kategori ke ${bestCat}: Terdeteksi potensi penurunan ceiling awan rendah atau jarak pandang dalam 1–3 jam ke depan.`),
       engineBreakdown: breakdown,
       classProbabilities: {
         VFR: finalProbs[0],
@@ -651,14 +729,14 @@ export async function runMultiEngineInference(params: {
       primaryMetricValue: `Cluster #${winningCluster}`,
       badgeText: regimeName,
       badgeVariant: "slate",
-      summary: desc,
+      summary: speciPrefixNote + desc,
       engineBreakdown: breakdown,
       indicators: baseIndicators,
     };
   }
 
   // =======================================================================
-  // 6. ANALOG FORECASTING (TOP-5 POLA HISTORIS — FAST BATCH TENSOR)
+  // 6. ANALOG FORECASTING (TOP-5 POLA HISTORIS — TIME-ALIGNED BATCH TENSOR)
   // =======================================================================
   if (moduleKey === "ANALOG_FORECASTING") {
     if (recordsAsc.length < 30) {
@@ -680,27 +758,26 @@ export async function runMultiEngineInference(params: {
       );
     }
 
-    const batchTabData = new Float32Array(batchSize * 24);
-    const batchSeqData = new Float32Array(batchSize * 6 * 16);
+    const batchTabData = new Float32Array(batchSize * 27);
+    const batchSeqData = new Float32Array(batchSize * 6 * 17);
 
     for (let b = 0; b < batchSize; b++) {
       const idx = candIndices[b];
-      const t24 = buildTabular24Tensor(recordsAsc.slice(idx - 6, idx + 1))
+      const t27 = buildTabular27TensorAt(recordsAsc, idx).data as Float32Array;
+      const s102 = buildSequence6x17TensorAt(recordsAsc, idx)
         .data as Float32Array;
-      const s96 = buildSequence6x16Tensor(recordsAsc.slice(idx - 5, idx + 1))
-        .data as Float32Array;
-      batchTabData.set(t24, b * 24);
-      batchSeqData.set(s96, b * 96);
+      batchTabData.set(t27, b * 27);
+      batchSeqData.set(s102, b * 102);
     }
 
     const batchTabTensor = new ort.Tensor("float32", batchTabData, [
       batchSize,
-      24,
+      27,
     ]);
     const batchSeqTensor = new ort.Tensor("float32", batchSeqData, [
       batchSize,
       6,
-      16,
+      17,
     ]);
 
     const totalSims = new Float64Array(batchSize);
@@ -762,11 +839,18 @@ export async function runMultiEngineInference(params: {
         Math.max(0, Number(((avgSim + 1) * 50).toFixed(1))),
       );
 
-      const futureSlice = recordsAsc.slice(i + 1, Math.min(n, i + 7));
+      // Evaluasi kejadian 3 jam ke depan (180 menit aktual) agar tetap akurat meski ada SPECI
+      const baseMs = new Date(recordsAsc[i].obs_time).getTime();
+      const futureSlice = recordsAsc.slice(i + 1).filter((r) => {
+        const dtMin = (new Date(r.obs_time).getTime() - baseMs) / 60_000;
+        return dtMin > 0 && dtMin <= 185;
+      });
+
       const hadTsCb = futureSlice.some((r) => r.has_ts || r.has_cb);
-      const minVis = Math.min(
-        ...futureSlice.map((r) => r.visibility_m ?? 9999),
-      );
+      const minVis =
+        futureSlice.length > 0
+          ? Math.min(...futureSlice.map((r) => r.visibility_m ?? 9999))
+          : 9999;
       const worstCat =
         futureSlice.find(
           (r) => r.flight_category && r.flight_category !== "VFR",
@@ -802,11 +886,12 @@ export async function runMultiEngineInference(params: {
       badgeText: `${adverseCnt}/5 HISTORIS ADVERSE`,
       badgeVariant: adverseCnt >= 3 ? "amber" : "emerald",
       summary:
-        adverseCnt >= 3
+        speciPrefixNote +
+        (adverseCnt >= 3
           ? `Dari 5 pola historis paling mirip (${comboLabel}), ${adverseCnt} di antaranya berkembang menjadi cuaca signifikan dalam 3 jam berikutnya.`
           : `Dari 5 pola historis paling mirip (${comboLabel}), mayoritas (${
               5 - adverseCnt
-            }/5) bertahan kondusif dalam 3 jam berikutnya.`,
+            }/5) bertahan kondusif dalam 3 jam berikutnya.`),
       engineBreakdown: breakdown,
       analogMatches: top5,
       indicators: baseIndicators,
@@ -854,9 +939,8 @@ export async function runMultiEngineInference(params: {
       }
     }
 
-    const prev = seq7[seq7.length - 2];
-    const tempJump = Math.abs(currTemp - Number(prev.temp_c ?? currTemp));
-    const qnhJump = Math.abs(currQnh - Number(prev.qnh_hpa ?? currQnh));
+    const tempJump = Math.abs(currTemp - Number(prevObs.temp_c ?? currTemp));
+    const qnhJump = Math.abs(currQnh - Number(prevObs.qnh_hpa ?? currQnh));
     const physicalError =
       currDew > currTemp ||
       currQnh < 960 ||
@@ -876,9 +960,11 @@ export async function runMultiEngineInference(params: {
       primaryMetricValue: isAnomaly ? "ANOMALI" : "LOLOS QC",
       badgeText: isAnomaly ? "ANOMALI TERDETEKSI" : "NORMAL (LOLOS QC)",
       badgeVariant: isAnomaly ? "rose" : "emerald",
-      summary: isAnomaly
-        ? "Peringatan Quality Control: Pembacaan parameter METAR terakhir menyimpang dari pola klimatologis atau terdapat lompatan nilai sensor mendadak. Harap verifikasi sensor AWOS."
-        : "Seluruh parameter meteorologi permukaan konsisten secara fisik dan berada dalam rentang klimatologis normal stasiun.",
+      summary:
+        speciPrefixNote +
+        (isAnomaly
+          ? "Peringatan Quality Control: Pembacaan parameter METAR/SPECI terakhir menyimpang dari pola klimatologis atau terdapat lompatan nilai sensor mendadak. Harap verifikasi sensor AWOS."
+          : "Seluruh parameter meteorologi permukaan konsisten secara fisik dan berada dalam rentang klimatologis normal stasiun."),
       engineBreakdown: breakdown,
       indicators: baseIndicators,
     };
@@ -928,11 +1014,13 @@ export async function runMultiEngineInference(params: {
       ? `REDA ±${finalMins} MENIT`
       : "KONDISI SUDAH CERAH",
     badgeVariant: isAdverseNow ? "amber" : "emerald",
-    summary: isAdverseNow
-      ? `Cuaca signifikan diprakirakan berangsur reda menuju kondisi VFR dalam ±${finalMins} menit (${(
-          finalMins / 60
-        ).toFixed(1)} jam).`
-      : "Saat ini tidak terdeteksi cuaca buruk signifikan (hujan/TS/kabut/IFR) pada observasi terakhir stasiun.",
+    summary:
+      speciPrefixNote +
+      (isAdverseNow
+        ? `Cuaca signifikan diprakirakan berangsur reda menuju kondisi VFR dalam ±${finalMins} menit (${(
+            finalMins / 60
+          ).toFixed(1)} jam).`
+        : "Saat ini tidak terdeteksi cuaca buruk signifikan (hujan/TS/kabut/IFR) pada observasi terakhir stasiun."),
     engineBreakdown: breakdown,
     indicators: baseIndicators,
   };

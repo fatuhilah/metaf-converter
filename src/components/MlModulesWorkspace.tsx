@@ -60,7 +60,7 @@ const ML_MODELS: MlModuleMeta[] = [
     title: "Nowcasting Visibilitas & Kabut/Asap",
     algo: "XGB + RF + LSTM + 1D-CNN",
     filePrefix: "vis_nowcast",
-    desc: "Memprediksi visibilitas minimum (meter) serta peluang kabut/asap 1–3 jam ke depan dari tren FSI, T-Td, angin, dan QNH.",
+    desc: "Memprediksi visibilitas minimum (meter) serta peluang kabut/asap 1–3 jam ke depan dari tren RH, FSI, T-Td, angin, dan QNH.",
     icon: Eye,
   },
   {
@@ -92,13 +92,13 @@ const ML_MODELS: MlModuleMeta[] = [
     title: "Klasterisasi Rezim Cuaca Bandara",
     algo: "K-Means + RF + LSTM + 1D-CNN",
     filePrefix: "wx_cluster",
-    desc: "Mengelompokkan observasi METAR ke dalam 4 rezim cuaca khas stasiun (angin laut, monsun, pemanasan terik, konvektif).",
+    desc: "Mengelompokkan observasi METAR/SPECI ke dalam 4 rezim cuaca khas stasiun (angin laut, monsun, pemanasan terik, konvektif).",
     icon: Layers,
   },
   {
     key: "ANALOG_FORECASTING",
     title: "Analog Forecasting (Pola Historis)",
-    algo: "PCA + RF + LSTM + 1D-CNN",
+    algo: "PCA + SVD + LSTM + 1D-CNN",
     filePrefix: "analog_enc",
     desc: "Mencari 5 kejadian historis di arsip Supabase yang pola perubahan METAR 3 jam terakhirnya paling mirip dengan hari ini.",
     icon: History,
@@ -681,7 +681,8 @@ export default function MlModulesWorkspace({
     setResult(null);
 
     try {
-      const fetchLimit = selectedModel === "ANALOG_FORECASTING" ? 600 : 14;
+      // Ambil 24 observasi terakhir agar jendela 3 jam (180 menit) tetap utuh meski disisipi banyak SPECI
+      const fetchLimit = selectedModel === "ANALOG_FORECASTING" ? 600 : 24;
 
       const { data, error } = await supabase
         .from("metar_observations")
