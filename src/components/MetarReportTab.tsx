@@ -263,7 +263,7 @@ export default function MetarReportTab() {
     let reportTitle = data.type === "SPECI" ? "SPECIAL REPORT" : "MET REPORT";
 
     const reportLines = [
-      `${reportTitle} (QAM)`,
+      `${reportTitle}`,
       headerLocation,
       `DATE : ${dateStr}`,
       `TIME : ${timeStr}`,
@@ -341,7 +341,7 @@ export default function MetarReportTab() {
           <textarea
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
-            placeholder="Paste data METAR / SPECI disini (wajib mencantumkan kode ICAO 4 huruf)..."
+            placeholder="Paste data METAR / SPECI disini..."
             className="w-full h-24 p-3 text-sm font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
           />
           {detectedStation && (

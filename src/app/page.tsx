@@ -1,5 +1,6 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import Image from "next/image";
 import {
   TableProperties,
   FileText,
@@ -7,9 +8,11 @@ import {
   ClipboardCheck,
   Lock,
   ArrowRight,
-  ShieldCheck,
   LogOut,
   BarChart4,
+  Eye,
+  EyeOff,
+  ClockAlert,
 } from "lucide-react";
 import MetarTableTab from "@/components/MetarTableTab";
 import MetarReportTab from "@/components/MetarReportTab";
@@ -17,96 +20,185 @@ import TafTableTab from "@/components/TafTableTab";
 import TafVerificationTab from "@/components/TafVerificationTab";
 import AcsTab from "@/components/AcsTab";
 
+// Durasi sesi: 24 jam dalam milidetik
+const SESSION_DURATION_MS = 24 * 60 * 60 * 1000;
+
 export default function Home() {
   // State Autentikasi
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true); // Biar gak kedip pas load
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   // State Navigasi Tab
   const [activeTab, setActiveTab] = useState("METAR_TABLE");
 
-  // Cek localStorage pas web pertama kali dibuka
-  useEffect(() => {
-    const savedAuth = localStorage.getItem("authAviationWeb");
-    if (savedAuth === "true") {
-      setIsAuthenticated(true);
-    }
-    setIsCheckingAuth(false);
+  // Helper: Paksa Logout karena Sesi Habis
+  const expireSession = useCallback(() => {
+    setIsAuthenticated(false);
+    setPassword("");
+    setShowPassword(false);
+    setLoginError(false);
+    setSessionExpired(true);
+    localStorage.removeItem("authAviationWeb");
+    localStorage.removeItem("authAviationLoginTime");
   }, []);
 
-  // Fungsi Login dengan localStorage
+  // 1. Cek localStorage & batas waktu 24 jam saat web pertama kali dibuka
+  useEffect(() => {
+    const savedAuth = localStorage.getItem("authAviationWeb");
+    const savedLoginTime = localStorage.getItem("authAviationLoginTime");
+
+    if (savedAuth === "true") {
+      const loginTimestamp = savedLoginTime ? Number(savedLoginTime) : 0;
+      const isExpired =
+        !loginTimestamp || Date.now() - loginTimestamp >= SESSION_DURATION_MS;
+
+      if (isExpired) {
+        expireSession();
+      } else {
+        setIsAuthenticated(true);
+      }
+    }
+    setIsCheckingAuth(false);
+  }, [expireSession]);
+
+  // 2. Pantau sisa waktu 24 jam secara real-time selama halaman terbuka
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const checkSessionInterval = setInterval(() => {
+      const savedLoginTime = localStorage.getItem("authAviationLoginTime");
+      const loginTimestamp = savedLoginTime ? Number(savedLoginTime) : 0;
+
+      if (
+        !loginTimestamp ||
+        Date.now() - loginTimestamp >= SESSION_DURATION_MS
+      ) {
+        expireSession();
+      }
+    }, 10000); // Cek setiap 10 detik
+
+    return () => clearInterval(checkSessionInterval);
+  }, [isAuthenticated, expireSession]);
+
+  // Fungsi Login dengan localStorage + Timestamp 24 Jam
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    // GANTI PASSWORD DI BAWAH INI SESUAI SELERA LU
-    if (password === "opr96607") {
+    if (password === "BMKG@metaf") {
       setIsAuthenticated(true);
       setLoginError(false);
-      localStorage.setItem("authAviationWeb", "true"); // Simpan ke browser
+      setSessionExpired(false);
+      localStorage.setItem("authAviationWeb", "true");
+      localStorage.setItem("authAviationLoginTime", Date.now().toString());
     } else {
       setLoginError(true);
+      setSessionExpired(false);
       setPassword("");
     }
   };
 
-  // Fungsi Logout
+  // Fungsi Logout Manual
   const handleLogout = () => {
     setIsAuthenticated(false);
-    localStorage.removeItem("authAviationWeb"); // Hapus memori login dari browser
+    setPassword("");
+    setShowPassword(false);
+    setSessionExpired(false);
+    localStorage.removeItem("authAviationWeb");
+    localStorage.removeItem("authAviationLoginTime");
   };
 
   // Tampilkan layar kosong sebentar pas ngecek memori (hindari glitch tampilan)
   if (isCheckingAuth) return <div className="min-h-screen bg-slate-900"></div>;
 
   // ---------------------------------------------------------
-  // UI HALAMAN LOGIN
+  // UI HALAMAN LOGIN (LAWANG SEWU + FROSTED GLASSMORPHISM)
   // ---------------------------------------------------------
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-800 flex items-center justify-center p-4 font-sans">
-        <div className="bg-white/10 backdrop-blur-xl border border-white/20 p-8 rounded-3xl shadow-2xl w-full max-w-md animate-in zoom-in duration-500">
-          <div className="flex justify-center mb-6">
-            <div className="bg-blue-500/20 p-4 rounded-full border border-blue-400/30">
-              <ShieldCheck size={48} className="text-blue-400" />
-            </div>
+      <div className="min-h-screen relative flex items-center justify-center p-4 font-sans overflow-hidden select-none">
+        {/* Background Image Preloaded dari public/lawang-sewu.jpg */}
+        <Image
+          src="/lawang-sewu.jpg"
+          alt="Lawang Sewu Background"
+          fill
+          priority
+          quality={90}
+          className="object-cover object-center scale-[1.01]"
+        />
+
+        {/* Overlay Halus & Vignette */}
+        <div className="absolute inset-0 bg-gradient-to-b from-slate-950/35 via-slate-900/20 to-slate-950/60 pointer-events-none" />
+
+        {/* Kartu Login Frosted Glassmorphism */}
+        <div className="relative z-10 w-full max-w-[400px] bg-white/15 backdrop-blur-md border border-white/40 px-8 py-10 rounded-[28px] shadow-[0_24px_60px_rgba(0,0,0,0.4)] animate-in fade-in zoom-in-95 duration-500">
+          <div className="text-center mb-7">
+            <h1 className="text-3xl font-extrabold tracking-tight text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.4)]">
+              Welcome to METAF
+            </h1>
+            <p className="text-white/90 text-xs md:text-sm mt-1.5 font-medium drop-shadow-[0_1px_6px_rgba(0,0,0,0.4)]">
+              Sistem Pengolah &amp; Interpretasi Meteorologi Penerbangan
+            </p>
           </div>
-          <h1 className="text-2xl md:text-3xl font-extrabold text-center text-white mb-2">
-            METAF Smart Converter
-          </h1>
-          <p className="text-blue-200 text-center text-sm mb-8 font-medium">
-            Masukkan Password untuk Akses Sistem
-          </p>
+
+          {/* Notifikasi Sesi Habis (24 Jam) */}
+          {sessionExpired && (
+            <div className="mb-5 flex items-center gap-2.5 text-amber-100 bg-amber-950/70 border border-amber-400/50 backdrop-blur-sm rounded-xl px-3.5 py-2.5 text-xs font-semibold shadow-md animate-in fade-in slide-in-from-top-2">
+              <ClockAlert size={18} className="text-amber-300 shrink-0" />
+              <span>Sesi Login Anda Habis, Silakan Login Ulang</span>
+            </div>
+          )}
 
           <form onSubmit={handleLogin} className="space-y-5">
             <div>
-              <div className="relative">
+              {/* Input Password Glass Style */}
+              <div className="relative group">
                 <Lock
-                  className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
-                  size={20}
+                  className="absolute left-4 top-1/2 -translate-y-1/2 text-white/85 group-focus-within:text-white transition-colors"
+                  size={18}
                 />
                 <input
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (loginError) setLoginError(false);
+                    if (sessionExpired) setSessionExpired(false);
+                  }}
                   placeholder="Masukkan Password..."
-                  className="w-full bg-slate-900/50 border border-slate-600 text-white placeholder-slate-400 pl-12 pr-4 py-3.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all font-mono"
+                  autoComplete="current-password"
+                  className="w-full bg-white/15 hover:bg-white/20 focus:bg-white/25 backdrop-blur-sm border border-white/50 focus:border-white text-white placeholder-white/80 pl-11 pr-11 py-3.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-white/40 transition-all text-sm font-medium shadow-inner"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  aria-label={
+                    showPassword ? "Sembunyikan password" : "Lihat password"
+                  }
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-white/80 hover:text-white transition-colors p-1 cursor-pointer"
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
               </div>
+
               {loginError && (
-                <p className="text-rose-400 text-xs mt-2 ml-1 font-medium animate-pulse">
-                  ⚠️ Password salah, jangan ngarang!
+                <p className="text-rose-200 bg-rose-950/65 border border-rose-400/40 backdrop-blur-sm rounded-lg px-3 py-1.5 text-xs mt-2.5 font-semibold animate-pulse">
+                  ⚠️ Password salah, silakan coba lagi!
                 </p>
               )}
             </div>
+
             <button
               type="submit"
-              className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-900/50 flex items-center justify-center gap-2 transition-all active:scale-95"
+              className="w-full bg-gradient-to-r from-[#b84a39] via-[#c85543] to-[#9e3a2b] hover:from-[#c95644] hover:via-[#d66350] hover:to-[#b04232] text-white font-bold py-3.5 rounded-xl shadow-[0_10px_25px_rgba(158,58,43,0.45)] border border-white/30 flex items-center justify-center gap-2 transition-all active:scale-[0.98] cursor-pointer"
             >
               Masuk Sistem <ArrowRight size={18} />
             </button>
           </form>
-          <p className="text-center text-slate-400 text-xs mt-8">
+
+          <p className="text-center text-white/85 text-[11px] mt-8 font-medium drop-shadow-[0_1px_4px_rgba(0,0,0,0.45)]">
             © 2026 Fatuh Hidayatullah.
           </p>
         </div>
@@ -115,76 +207,94 @@ export default function Home() {
   }
 
   // ---------------------------------------------------------
-  // UI HALAMAN UTAMA (DASHBOARD)
+  // UI HALAMAN UTAMA (DASHBOARD — LAWANG SEWU & TERRACOTTA GLASS)
   // ---------------------------------------------------------
+  const navTabStyle = (tabKey: string, extraClasses = "") =>
+    `py-4 px-3 flex items-center justify-center gap-2 font-bold text-[13px] transition-all cursor-pointer ${extraClasses} ${
+      activeTab === tabKey
+        ? "bg-gradient-to-r from-[#b84a39] to-[#c95644] text-white shadow-inner"
+        : "bg-slate-700/90 hover:bg-slate-800 text-slate-100"
+    }`;
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-100 via-blue-50 to-slate-200 text-slate-800 font-sans p-3 md:p-8 relative">
-      <header className="max-w-7xl mx-auto mb-6 text-center pt-2 md:pt-0">
-        <h1 className="text-2xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-700 to-cyan-600 mb-2">
+    <div className="min-h-screen relative text-slate-800 font-sans p-3 md:p-8 overflow-x-hidden">
+      {/* Latar Belakang Lawang Sewu Terkunci (Fixed) + Soft Blur & Tirai Langit */}
+      <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
+        <Image
+          src="/lawang-sewu.jpg"
+          alt="Lawang Sewu Dashboard Background"
+          fill
+          priority
+          quality={90}
+          className="object-cover object-center blur-[5px] scale-[1.06]"
+        />
+        <div className="absolute inset-0 bg-gradient-to-b from-slate-950/45 via-slate-900/10 to-slate-900/35" />
+        <div className="absolute inset-0 bg-white/[0.08] backdrop-blur-[1px]" />
+      </div>
+
+      {/* Header dengan Judul Putih Kontras */}
+      <header className="max-w-7xl mx-auto mb-6 text-center pt-2 md:pt-1 relative z-10">
+        <h1 className="text-3xl md:text-5xl font-extrabold text-white tracking-tight drop-shadow-[0_3px_14px_rgba(0,0,0,0.45)] mb-2">
           METAF Smart Converter
         </h1>
-        <p className="text-slate-500 text-xs md:text-sm font-medium px-4">
-          Sistem Pengolah & Interpretasi Data Meteorologi Penerbangan
+        <p className="text-white/95 text-xs md:text-base font-medium px-4 drop-shadow-[0_2px_8px_rgba(0,0,0,0.5)]">
+          Sistem Pengolah &amp; Interpretasi Data Meteorologi Penerbangan
         </p>
       </header>
 
-      <main className="max-w-7xl mx-auto bg-white/70 backdrop-blur-md border border-white shadow-xl rounded-2xl overflow-hidden mb-16 md:mb-0">
-        {/* Navigation Tabs */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 border-b border-slate-200 bg-slate-50/50">
+      {/* Kontainer Utama Warm Frosted Glass Transparan */}
+      <main className="relative z-10 max-w-7xl mx-auto bg-stone-100/45 backdrop-blur-md border border-white/60 shadow-[0_24px_60px_rgba(15,23,42,0.32)] rounded-3xl overflow-hidden mb-16 md:mb-0">
+        {/* Navigation Tabs Menyatu Penuh (Edge-to-Edge) dengan Sekat Garis Putih Tipis */}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 border-b border-white/35 overflow-hidden">
           <button
             onClick={() => setActiveTab("METAR_TABLE")}
-            className={`py-4 px-3 flex items-center justify-center gap-1.5 font-bold text-[13px] transition-all border-b md:border-b-0 border-r border-slate-200 cursor-pointer ${
-              activeTab === "METAR_TABLE"
-                ? "bg-blue-600 text-white shadow-inner"
-                : "text-slate-600 hover:bg-slate-100"
-            }`}
+            className={navTabStyle(
+              "METAR_TABLE",
+              "border-b md:border-b-0 border-r border-white/35",
+            )}
           >
             <TableProperties size={16} /> METAR to Table
           </button>
           <button
             onClick={() => setActiveTab("METAR_REPORT")}
-            className={`py-4 px-3 flex items-center justify-center gap-1.5 font-bold text-[13px] transition-all border-b md:border-b-0 md:border-r lg:border-r border-slate-200 cursor-pointer ${
-              activeTab === "METAR_REPORT"
-                ? "bg-blue-600 text-white shadow-inner"
-                : "text-slate-600 hover:bg-slate-100"
-            }`}
+            className={navTabStyle(
+              "METAR_REPORT",
+              "border-b md:border-b-0 md:border-r lg:border-r border-white/35",
+            )}
           >
-            <FileText size={16} /> MET REPORT
+            <FileText size={16} /> METAR to MET REPORT
           </button>
           <button
             onClick={() => setActiveTab("TAF_TABLE")}
-            className={`py-4 px-3 flex items-center justify-center gap-1.5 font-bold text-[13px] transition-all border-b sm:border-b-0 border-r border-slate-200 cursor-pointer ${
-              activeTab === "TAF_TABLE"
-                ? "bg-blue-600 text-white shadow-inner"
-                : "text-slate-600 hover:bg-slate-100"
-            }`}
+            className={navTabStyle(
+              "TAF_TABLE",
+              "border-b sm:border-b-0 border-r border-white/35",
+            )}
           >
             <CloudRain size={16} /> TAF to Table
           </button>
           <button
             onClick={() => setActiveTab("TAF_VERIFICATION")}
-            className={`py-4 px-3 flex items-center justify-center gap-1.5 font-bold text-[13px] transition-all border-r border-slate-200 cursor-pointer ${
-              activeTab === "TAF_VERIFICATION"
-                ? "bg-blue-600 text-white shadow-inner"
-                : "text-slate-600 hover:bg-slate-100"
-            }`}
+            className={navTabStyle(
+              "TAF_VERIFICATION",
+              "border-r border-white/35",
+            )}
           >
             <ClipboardCheck size={16} /> Verifikasi TAF
           </button>
           <button
             onClick={() => setActiveTab("ACS_CLIMATOLOGY")}
-            className={`py-4 px-3 flex items-center justify-center gap-1.5 font-bold text-[13px] transition-all cursor-pointer ${
-              activeTab === "ACS_CLIMATOLOGY"
-                ? "bg-blue-600 text-white shadow-inner"
-                : "text-slate-600 hover:bg-slate-100"
-            }`}
+            className={navTabStyle(
+              "ACS_CLIMATOLOGY",
+              "col-span-2 md:col-span-1 border-t lg:border-t-0 border-white/35",
+            )}
           >
-            <BarChart4 size={16} /> ACS (Klimatologi)
+            <BarChart4 size={16} /> ACS
           </button>
         </div>
 
         {/* Content Area */}
-        <div className="p-4 md:p-8">
+        <div className="p-4 md:p-7">
           {activeTab === "METAR_TABLE" && <MetarTableTab />}
           {activeTab === "METAR_REPORT" && <MetarReportTab />}
           {activeTab === "TAF_TABLE" && <TafTableTab />}
@@ -197,7 +307,7 @@ export default function Home() {
       <div className="fixed bottom-4 right-4 md:bottom-8 md:right-8 z-50 animate-in slide-in-from-bottom-5">
         <button
           onClick={handleLogout}
-          className="flex items-center gap-2 bg-white/80 backdrop-blur-md border border-slate-200 text-slate-500 hover:text-rose-600 hover:bg-rose-50 px-5 py-2.5 rounded-full text-xs md:text-sm font-bold shadow-lg shadow-slate-200/50 transition-all hover:-translate-y-1"
+          className="flex items-center gap-2 bg-white/90 backdrop-blur-md border border-white text-slate-700 hover:text-rose-700 hover:bg-rose-50 px-5 py-2.5 rounded-full text-xs md:text-sm font-bold shadow-lg shadow-slate-950/20 transition-all hover:-translate-y-1 cursor-pointer"
         >
           <LogOut size={16} /> Logout
         </button>

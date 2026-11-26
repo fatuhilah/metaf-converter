@@ -603,7 +603,7 @@ export default function MetarTableTab() {
         <textarea
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
-          placeholder="Paste data METAR / SPECI di sini (wajib mencantumkan kode ICAO 4 huruf)..."
+          placeholder="Paste data METAR / SPECI di sini..."
           className="w-full h-36 p-3 text-sm font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50/50"
         />
         {detectedStation && (
