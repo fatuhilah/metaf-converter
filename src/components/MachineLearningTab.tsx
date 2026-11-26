@@ -380,7 +380,7 @@ export default function MachineLearningTab() {
       const icaoSummary = Array.from(detectedIcaos).join(", ");
       setUploadFeedback({
         type: "success",
-        text: `Berhasil menyimpan ${dedupedRows.length} observasi (${icaoSummary}) ke Supabase METAF_AI${
+        text: `Berhasil menyimpan ${dedupedRows.length} observasi (${icaoSummary}) ke Database${
           skipped > 0 ? ` (${skipped} baris non-METAR dilewati)` : ""
         }.`,
       });
