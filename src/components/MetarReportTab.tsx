@@ -161,7 +161,7 @@ export default function MetarReportTab() {
 
   const handleGenerate = () => {
     if (!inputText.trim() || !qfeText.trim()) {
-      showToastMsg("⚠️ Lengkapin dulu data METAR/SPECI dan QFE-nya ya...");
+      showToastMsg("⚠️ Lengkapin dulu data METAR/SPECI dan QFE-nya to ya...");
       return;
     }
 

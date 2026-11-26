@@ -300,9 +300,7 @@ export default function MetarTableTab() {
 
   const handleGenerate = () => {
     if (!inputText.trim())
-      return showToastMsg(
-        "⚠️ Masukkan data METAR/SPECI nya yaaa, terus ini mau generate apaan?!",
-      );
+      return showToastMsg("⚠️ Masukkan data METAR/SPECI dulu to yaa...");
 
     const lines = inputText.trim().split("\n");
     let list: ExtendedMetarData[] = [];
