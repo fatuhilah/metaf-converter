@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   RefreshCw,
   MapPin,
+  Download,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 // SESUAIKAN PATH INI dengan letak file stations.ts di project lu:
@@ -40,6 +41,21 @@ interface ParsedMetarRow {
   flight_category: string;
   source: string;
 }
+
+const MONTHS_ID = [
+  "Januari",
+  "Februari",
+  "Maret",
+  "April",
+  "Mei",
+  "Juni",
+  "Juli",
+  "Agustus",
+  "September",
+  "Oktober",
+  "November",
+  "Desember",
+];
 
 function extractStationsFromModule(
   mod: Record<string, unknown>,
@@ -277,6 +293,8 @@ export default function MachineLearningTab() {
   const now = new Date();
   const [archiveYear, setArchiveYear] = useState(now.getUTCFullYear());
   const [archiveMonth, setArchiveMonth] = useState(now.getUTCMonth() + 1);
+  const [endYear, setEndYear] = useState(now.getUTCFullYear());
+  const [endMonth, setEndMonth] = useState(now.getUTCMonth() + 1);
   const [rawArchiveInput, setRawArchiveInput] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [uploadFeedback, setUploadFeedback] = useState<{
@@ -318,30 +336,46 @@ export default function MachineLearningTab() {
     fetchDbStats();
   }, [fetchDbStats]);
 
-  const handleIngestToSupabase = async () => {
-    if (!supabase) return;
-    setUploadFeedback(null);
-
+  // Helper: Parse multi-baris dengan dukungan auto-rollover bulan & tahun + filter rentang
+  const parseArchiveWithRange = useCallback(() => {
     const lines = rawArchiveInput
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter(Boolean);
 
-    if (lines.length === 0) {
-      setUploadFeedback({
-        type: "error",
-        text: "Tempelkan minimal 1 baris data METAR/SPECI terlebih dahulu.",
-      });
-      return;
-    }
+    const startKey = archiveYear * 100 + archiveMonth;
+    const endKey = endYear * 100 + endMonth;
 
     const parsedRows: ParsedMetarRow[] = [];
     let skipped = 0;
     const detectedIcaos = new Set<string>();
 
+    let prevDay: number | null = null;
+    let curYear = archiveYear;
+    let curMonth = archiveMonth;
+
     for (const line of lines) {
-      const row = parseMetarLine(line, archiveYear, archiveMonth);
+      const upper = line.toUpperCase();
+      const timeMatch = upper.match(/\b(\d{2})(\d{2})(\d{2})Z\b/);
+
+      if (timeMatch) {
+        const day = parseInt(timeMatch[1], 10);
+        if (prevDay !== null && day < prevDay - 15) {
+          curMonth += 1;
+          if (curMonth > 12) {
+            curMonth = 1;
+            curYear += 1;
+          }
+        }
+        prevDay = day;
+      }
+
+      const row = parseMetarLine(line, curYear, curMonth);
       if (row) {
+        const rowYmKey = curYear * 100 + curMonth;
+        if (startKey <= endKey && (rowYmKey < startKey || rowYmKey > endKey)) {
+          continue;
+        }
         parsedRows.push(row);
         detectedIcaos.add(row.icao_code);
       } else {
@@ -349,19 +383,50 @@ export default function MachineLearningTab() {
       }
     }
 
-    if (parsedRows.length === 0) {
-      setUploadFeedback({
-        type: "error",
-        text: "Tidak ada baris yang valid. Pastikan tiap baris memuat kode ICAO (4 huruf) dan waktu DDHHMMZ.",
-      });
-      return;
-    }
-
     const uniqueMap = new Map<string, ParsedMetarRow>();
     for (const r of parsedRows) {
       uniqueMap.set(`${r.icao_code}_${r.report_type}_${r.obs_time}`, r);
     }
-    const dedupedRows = Array.from(uniqueMap.values());
+
+    return {
+      totalLines: lines.length,
+      dedupedRows: Array.from(uniqueMap.values()),
+      skipped,
+      detectedIcaos,
+      isRangeValid: startKey <= endKey,
+    };
+  }, [rawArchiveInput, archiveYear, archiveMonth, endYear, endMonth]);
+
+  const handleIngestToSupabase = async () => {
+    if (!supabase) return;
+    setUploadFeedback(null);
+
+    const { totalLines, dedupedRows, skipped, detectedIcaos, isRangeValid } =
+      parseArchiveWithRange();
+
+    if (totalLines === 0) {
+      setUploadFeedback({
+        type: "error",
+        text: "Tempelkan minimal 1 baris data METAR/SPECI terlebih dahulu.",
+      });
+      return;
+    }
+
+    if (!isRangeValid) {
+      setUploadFeedback({
+        type: "error",
+        text: "Rentang periode tidak valid: Tahun/Bulan Awal tidak boleh melebihi Tahun/Bulan Akhir.",
+      });
+      return;
+    }
+
+    if (dedupedRows.length === 0) {
+      setUploadFeedback({
+        type: "error",
+        text: "Tidak ada baris yang valid dalam rentang periode tersebut. Pastikan tiap baris memuat kode ICAO (4 huruf) dan waktu DDHHMMZ.",
+      });
+      return;
+    }
 
     setIsUploading(true);
     try {
@@ -405,6 +470,97 @@ export default function MachineLearningTab() {
     } finally {
       setIsUploading(false);
     }
+  };
+
+  // Fungsi Ekspor 1 File CSV Gabungan (Multi-Bulan / Multi-Tahun) untuk Google Colab
+  const handleDownloadColabCsv = () => {
+    setUploadFeedback(null);
+    const { totalLines, dedupedRows, skipped, detectedIcaos, isRangeValid } =
+      parseArchiveWithRange();
+
+    if (totalLines === 0) {
+      setUploadFeedback({
+        type: "error",
+        text: "Tempelkan minimal 1 baris data METAR/SPECI terlebih dahulu untuk diekspor ke CSV.",
+      });
+      return;
+    }
+
+    if (!isRangeValid) {
+      setUploadFeedback({
+        type: "error",
+        text: "Rentang periode tidak valid: Tahun/Bulan Awal tidak boleh melebihi Tahun/Bulan Akhir.",
+      });
+      return;
+    }
+
+    if (dedupedRows.length === 0) {
+      setUploadFeedback({
+        type: "error",
+        text: "Tidak ada baris valid dalam rentang periode tersebut untuk diekspor ke CSV.",
+      });
+      return;
+    }
+
+    const csvHeader =
+      "icao_code,obs_time,raw_metar,wind_dir,is_vrb,wind_speed,wind_gust,visibility_m,temp_c,dewpoint_c,dewpoint_spread,qnh_hpa,weather_phenomena,has_ts,has_cb,lowest_ceiling_ft,flight_category";
+
+    const csvRows = [csvHeader];
+    for (const r of dedupedRows) {
+      const safeRaw = `"${r.raw_metar.replace(/"/g, '""')}"`;
+      const safeWx = `"${r.weather_phenomena.join(" ").replace(/"/g, '""')}"`;
+      csvRows.push(
+        [
+          r.icao_code,
+          r.obs_time,
+          safeRaw,
+          r.wind_dir ?? "",
+          r.is_vrb,
+          r.wind_speed ?? "",
+          r.wind_gust ?? "",
+          r.visibility_m ?? "",
+          r.temp_c ?? "",
+          r.dewpoint_c ?? "",
+          r.dewpoint_spread ?? "",
+          r.qnh_hpa ?? "",
+          safeWx,
+          r.has_ts,
+          r.has_cb,
+          r.lowest_ceiling_ft ?? "",
+          r.flight_category,
+        ].join(","),
+      );
+    }
+
+    const csvContent = "\uFEFF" + csvRows.join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const icaoTag =
+      detectedIcaos.size === 1
+        ? Array.from(detectedIcaos)[0].toLowerCase()
+        : "multi_station";
+    const startTag = `${archiveYear}${String(archiveMonth).padStart(2, "0")}`;
+    const endTag = `${endYear}${String(endMonth).padStart(2, "0")}`;
+    const fileName =
+      startTag === endTag
+        ? `dataset_${icaoTag}_${startTag}.csv`
+        : `dataset_${icaoTag}_${startTag}_to_${endTag}.csv`;
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    setUploadFeedback({
+      type: "success",
+      text: `Berhasil mengunduh ${dedupedRows.length} baris observasi ke '${fileName}' (${
+        skipped > 0 ? `${skipped} baris non-METAR dilewati, ` : ""
+      }siap di-upload ke Google Colab).`,
+    });
   };
 
   const handleAutoSelectIcao = (icao: string) => {
@@ -488,43 +644,59 @@ export default function MachineLearningTab() {
 
         <div className="mt-4 space-y-3">
           <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2">
-              <label className="text-xs font-bold text-slate-600">
-                Tahun Arsip:
-              </label>
+            {/* Rentang Awal */}
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-2.5 py-1.5 rounded-xl">
+              <span className="text-xs font-bold text-slate-600">Dari:</span>
               <input
                 type="number"
                 min={2000}
                 max={2099}
                 value={archiveYear}
-                onChange={(e) => setArchiveYear(Number(e.target.value))}
-                className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-800 focus:outline-none focus:border-[#b84a39]"
+                onChange={(e) => {
+                  const y = Number(e.target.value);
+                  setArchiveYear(y);
+                  if (y > endYear) setEndYear(y);
+                }}
+                aria-label="Tahun Awal Arsip"
+                className="w-20 px-2 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-800 focus:outline-none focus:border-[#b84a39]"
               />
-            </div>
-
-            <div className="flex items-center gap-2">
-              <label className="text-xs font-bold text-slate-600">
-                Bulan Arsip:
-              </label>
               <select
                 value={archiveMonth}
-                onChange={(e) => setArchiveMonth(Number(e.target.value))}
-                className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-800 focus:outline-none focus:border-[#b84a39]"
+                onChange={(e) => {
+                  const m = Number(e.target.value);
+                  setArchiveMonth(m);
+                  if (archiveYear === endYear && m > endMonth) setEndMonth(m);
+                }}
+                aria-label="Bulan Awal Arsip"
+                className="px-2 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-800 focus:outline-none focus:border-[#b84a39]"
               >
-                {[
-                  "Januari",
-                  "Februari",
-                  "Maret",
-                  "April",
-                  "Mei",
-                  "Juni",
-                  "Juli",
-                  "Agustus",
-                  "September",
-                  "Oktober",
-                  "November",
-                  "Desember",
-                ].map((nama, idx) => (
+                {MONTHS_ID.map((nama, idx) => (
+                  <option key={nama} value={idx + 1}>
+                    {idx + 1} - {nama}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Rentang Akhir */}
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-2.5 py-1.5 rounded-xl">
+              <span className="text-xs font-bold text-slate-600">Sampai:</span>
+              <input
+                type="number"
+                min={2000}
+                max={2099}
+                value={endYear}
+                onChange={(e) => setEndYear(Number(e.target.value))}
+                aria-label="Tahun Akhir Arsip"
+                className="w-20 px-2 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-800 focus:outline-none focus:border-[#b84a39]"
+              />
+              <select
+                value={endMonth}
+                onChange={(e) => setEndMonth(Number(e.target.value))}
+                aria-label="Bulan Akhir Arsip"
+                className="px-2 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-800 focus:outline-none focus:border-[#b84a39]"
+              >
+                {MONTHS_ID.map((nama, idx) => (
                   <option key={nama} value={idx + 1}>
                     {idx + 1} - {nama}
                   </option>
@@ -533,7 +705,8 @@ export default function MachineLearningTab() {
             </div>
 
             <span className="text-[11px] text-slate-500">
-              *Kode ICAO terdeteksi otomatis dari masing-masing baris sandi.
+              *Kode ICAO, pergantian bulan &amp; tahun terdeteksi otomatis dari
+              masing-masing baris sandi.
             </span>
           </div>
 
@@ -541,21 +714,32 @@ export default function MachineLearningTab() {
             rows={4}
             value={rawArchiveInput}
             onChange={(e) => setRawArchiveInput(e.target.value)}
-            placeholder="Paste arsip data METAR / SPECI bulanan di sini (1 baris per sandi, contoh: METAR XXXX 260000Z 14006KT 9999 FEW020 28/23 Q1011=)..."
+            placeholder="Paste arsip data METAR / SPECI bulanan atau multi-tahun di sini (1 baris per sandi, contoh: METAR XXXX 260000Z 14006KT 9999 FEW020 28/23 Q1011=)..."
             className="w-full p-3.5 rounded-xl border border-slate-300 bg-white font-mono text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#b84a39]/30 focus:border-[#b84a39]"
           />
 
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <button
-              onClick={handleIngestToSupabase}
-              disabled={isUploading || dbStatus !== "CONNECTED"}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#b84a39] to-[#c95644] hover:from-[#a33e2e] hover:to-[#b84a39] disabled:opacity-50 text-white font-bold text-xs shadow-sm transition-all cursor-pointer"
-            >
-              <UploadCloud size={16} />
-              {isUploading
-                ? "Menyimpan ke Supabase..."
-                : "Parse & Simpan ke Database"}
-            </button>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                onClick={handleIngestToSupabase}
+                disabled={isUploading || dbStatus !== "CONNECTED"}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#b84a39] to-[#c95644] hover:from-[#a33e2e] hover:to-[#b84a39] disabled:opacity-50 text-white font-bold text-xs shadow-sm transition-all cursor-pointer"
+              >
+                <UploadCloud size={16} />
+                {isUploading
+                  ? "Menyimpan ke Supabase..."
+                  : "Parse & Simpan ke Database"}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDownloadColabCsv}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shadow-sm transition-all cursor-pointer"
+              >
+                <Download size={16} />
+                Download CSV (Untuk Google Colab)
+              </button>
+            </div>
 
             {uploadFeedback && (
               <div
