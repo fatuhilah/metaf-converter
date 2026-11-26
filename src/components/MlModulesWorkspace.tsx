@@ -18,11 +18,16 @@ import {
   ExternalLink,
   UploadCloud,
   Cpu,
+  LineChart,
+  BarChart3,
+  Table2,
+  Image as ImageIcon,
+  Check,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import {
-  runHybridModuleInference,
-  EngineMode,
+  runMultiEngineInference,
+  EngineKey,
   HybridPredictionOutput,
   HybridMetarRecord,
 } from "@/lib/onnxHybridEngine";
@@ -53,15 +58,15 @@ const ML_MODELS: MlModuleMeta[] = [
   {
     key: "VISIBILITY_NOWCAST",
     title: "Nowcasting Visibilitas & Kabut/Asap",
-    algo: "XGBoost + PyTorch LSTM Regressor",
+    algo: "XGB + RF + LSTM + 1D-CNN",
     filePrefix: "vis_nowcast",
-    desc: "Memprediksi visibilitas minimum (meter) serta peluang kabut/asap 1–3 jam ke depan dari tren T, Td, angin, dan QNH.",
+    desc: "Memprediksi visibilitas minimum (meter) serta peluang kabut/asap 1–3 jam ke depan dari tren FSI, T-Td, angin, dan QNH.",
     icon: Eye,
   },
   {
     key: "TS_CB_PREDICTION",
     title: "Prediksi Thunderstorm / CB Lokal",
-    algo: "XGBoost + PyTorch LSTM Classifier",
+    algo: "XGB + RF + LSTM + 1D-CNN",
     filePrefix: "ts_cb",
     desc: "Mendeteksi peluang pertumbuhan awan CB dan kejadian TS/TSRA dalam 30–180 menit ke depan berdasarkan prekursor permukaan.",
     icon: CloudLightning,
@@ -69,7 +74,7 @@ const ML_MODELS: MlModuleMeta[] = [
   {
     key: "FLIGHT_CATEGORY_TFT",
     title: "Prediksi Flight Category & Ceiling",
-    algo: "XGBoost + PyTorch LSTM Multi-Class",
+    algo: "XGB + RF + LSTM + 1D-CNN",
     filePrefix: "flight_cat",
     desc: "Klasifikasi probabilistik kategori penerbangan (VFR, MVFR, IFR, LIFR) dan ketinggian dasar awan rendah 1–3 jam ke depan.",
     icon: Plane,
@@ -77,7 +82,7 @@ const ML_MODELS: MlModuleMeta[] = [
   {
     key: "WIND_SHEAR_BILSTM",
     title: "Prediksi Wind Shear & Pergeseran Angin",
-    algo: "XGBoost + Bidirectional LSTM",
+    algo: "XGB + RF + Bi-LSTM + 1D-CNN",
     filePrefix: "wind_shear",
     desc: "Memprediksi lonjakan gust dan perubahan arah angin mendadak (≥45°) di area approach dan take-off bandara.",
     icon: Wind,
@@ -85,7 +90,7 @@ const ML_MODELS: MlModuleMeta[] = [
   {
     key: "WEATHER_CLUSTERING",
     title: "Klasterisasi Rezim Cuaca Bandara",
-    algo: "K-Means + LSTM Sequence Clustering",
+    algo: "K-Means + RF + LSTM + 1D-CNN",
     filePrefix: "wx_cluster",
     desc: "Mengelompokkan observasi METAR ke dalam 4 rezim cuaca khas stasiun (angin laut, monsun, pemanasan terik, konvektif).",
     icon: Layers,
@@ -93,7 +98,7 @@ const ML_MODELS: MlModuleMeta[] = [
   {
     key: "ANALOG_FORECASTING",
     title: "Analog Forecasting (Pola Historis)",
-    algo: "PCA + LSTM Trajectory Encoder",
+    algo: "PCA + RF + LSTM + 1D-CNN",
     filePrefix: "analog_enc",
     desc: "Mencari 5 kejadian historis di arsip Supabase yang pola perubahan METAR 3 jam terakhirnya paling mirip dengan hari ini.",
     icon: History,
@@ -101,7 +106,7 @@ const ML_MODELS: MlModuleMeta[] = [
   {
     key: "ANOMALY_QC",
     title: "Deteksi Anomali Sensor & Audit QC",
-    algo: "PCA Z-Score + LSTM Autoencoder",
+    algo: "PCA + RF + LSTM-AE + CNN-AE",
     filePrefix: "anomaly_qc",
     desc: "Mendeteksi anomali pembacaan sensor AWOS (lompatan mendadak) atau kombinasi parameter cuaca yang menyimpang secara klimatologis.",
     icon: ShieldAlert,
@@ -109,12 +114,331 @@ const ML_MODELS: MlModuleMeta[] = [
   {
     key: "WEATHER_PERSISTENCE",
     title: "Prediksi Durasi & Waktu Reda Cuaca",
-    algo: "XGBoost + LSTM Clearing Regressor",
+    algo: "XGB + RF + LSTM + 1D-CNN",
     filePrefix: "clearing_time",
     desc: "Memprediksi estimasi waktu pemulihan (menit/jam hingga kembali VFR) saat hujan lebat, TSRA, atau kabut sedang berlangsung.",
     icon: Timer,
   },
 ];
+
+const ENGINE_CHIPS: {
+  key: EngineKey;
+  label: string;
+  tag: string;
+  prefix: string;
+  activeBg: string;
+}[] = [
+  {
+    key: "XGBOOST",
+    label: "XGBoost",
+    tag: "Boosting",
+    prefix: "xgb",
+    activeBg: "bg-blue-600 text-white border-blue-700",
+  },
+  {
+    key: "RF",
+    label: "Random Forest",
+    tag: "Bagging",
+    prefix: "rf",
+    activeBg: "bg-violet-600 text-white border-violet-700",
+  },
+  {
+    key: "LSTM",
+    label: "PyTorch LSTM",
+    tag: "Recurrent",
+    prefix: "lstm",
+    activeBg: "bg-rose-600 text-white border-rose-700",
+  },
+  {
+    key: "CNN",
+    label: "1D-CNN",
+    tag: "Conv1D",
+    prefix: "cnn",
+    activeBg: "bg-emerald-600 text-white border-emerald-700",
+  },
+];
+
+interface StationScientificMetrics {
+  icao: string;
+  totalSamples: number;
+  trainSamples: number;
+  testSamples: number;
+  modules: Record<
+    string,
+    {
+      regression?: Record<string, { r2: number; mae: number; rmse: number }>;
+      verification?: {
+        eventLabel: string;
+        [modelName: string]:
+          | string
+          | { pod: number; far: number; csi: number; tss: number };
+      };
+      featureImportance?: { name: string; importance: number }[];
+    }
+  >;
+}
+
+function TimeSeriesForecastChart({
+  chartData,
+}: {
+  chartData: NonNullable<HybridPredictionOutput["chartData"]>;
+}) {
+  const { title, unit, yMin, yMax, points } = chartData;
+  const W = 720;
+  const H = 225;
+  const padL = 54;
+  const padR = 24;
+  const padT = 22;
+  const padB = 34;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  const spanY = Math.max(1, yMax - yMin);
+  const getX = (idx: number) =>
+    padL + (idx / Math.max(1, points.length - 1)) * plotW;
+  const getY = (val: number) => padT + plotH - ((val - yMin) / spanY) * plotH;
+
+  const buildPolyline = (
+    selector: (p: (typeof points)[0]) => number | null,
+  ) => {
+    const coords: string[] = [];
+    points.forEach((p, idx) => {
+      const v = selector(p);
+      if (v !== null && !Number.isNaN(v)) {
+        coords.push(`${getX(idx).toFixed(1)},${getY(v).toFixed(1)}`);
+      }
+    });
+    return coords.join(" ");
+  };
+
+  const obsLine = buildPolyline((p) => p.observed);
+  const xgbLine = buildPolyline((p) => p.xgbPred);
+  const rfLine = buildPolyline((p) => p.rfPred);
+  const lstmLine = buildPolyline((p) => p.lstmPred);
+  const cnnLine = buildPolyline((p) => p.cnnPred);
+  const ensLine = buildPolyline((p) => p.ensemblePred);
+
+  const lastIdx = points.length - 1;
+  const lastPt = points[lastIdx];
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((t) =>
+    Math.round(yMin + t * spanY),
+  );
+
+  return (
+    <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-xs font-extrabold text-slate-800">
+          <LineChart size={16} className="text-[#b84a39]" />
+          <span>{title}</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 text-[11px] font-bold">
+          <span className="inline-flex items-center gap-1.5 text-amber-600">
+            <span className="w-3 h-0.5 bg-amber-500 inline-block" /> Observation
+          </span>
+          {lastPt?.xgbPred !== null && (
+            <span className="inline-flex items-center gap-1.5 text-blue-600">
+              <span className="w-3 h-0.5 bg-blue-600 inline-block" /> XGB
+            </span>
+          )}
+          {lastPt?.rfPred !== null && (
+            <span className="inline-flex items-center gap-1.5 text-violet-600">
+              <span className="w-3 h-0.5 bg-violet-600 inline-block" /> RF
+            </span>
+          )}
+          {lastPt?.lstmPred !== null && (
+            <span className="inline-flex items-center gap-1.5 text-rose-600">
+              <span className="w-3 h-0.5 bg-rose-600 inline-block" /> LSTM
+            </span>
+          )}
+          {lastPt?.cnnPred !== null && (
+            <span className="inline-flex items-center gap-1.5 text-teal-600">
+              <span className="w-3 h-0.5 bg-teal-600 inline-block" /> 1D-CNN
+            </span>
+          )}
+          {lastPt?.ensemblePred !== null && (
+            <span className="inline-flex items-center gap-1.5 text-emerald-700">
+              <span className="w-3 h-1 bg-emerald-600 inline-block" /> Ensemble
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="w-full overflow-x-auto">
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          className="w-full h-auto min-w-[540px] select-none"
+        >
+          <rect
+            x={getX(lastIdx - 1)}
+            y={padT}
+            width={getX(lastIdx) - getX(lastIdx - 1)}
+            height={plotH}
+            fill="#fef3c7"
+            opacity={0.45}
+          />
+          {yTicks.map((tick) => {
+            const y = getY(tick);
+            return (
+              <g key={tick}>
+                <line
+                  x1={padL}
+                  y1={y}
+                  x2={W - padR}
+                  y2={y}
+                  stroke="#e2e8f0"
+                  strokeDasharray="3 3"
+                />
+                <text
+                  x={padL - 8}
+                  y={y + 3.5}
+                  textAnchor="end"
+                  fontSize="10"
+                  fill="#64748b"
+                  fontFamily="monospace"
+                >
+                  {tick}
+                </text>
+              </g>
+            );
+          })}
+          {points.map((p, idx) => {
+            if (idx % 2 !== 0 && idx !== lastIdx) return null;
+            return (
+              <text
+                key={`${p.timeLabel}-${idx}`}
+                x={getX(idx)}
+                y={H - 10}
+                textAnchor="middle"
+                fontSize="10"
+                fontWeight={idx === lastIdx ? "bold" : "normal"}
+                fill={idx === lastIdx ? "#b84a39" : "#64748b"}
+                fontFamily="monospace"
+              >
+                {p.timeLabel}
+              </text>
+            );
+          })}
+          {obsLine && (
+            <polyline
+              fill="none"
+              stroke="#f59e0b"
+              strokeWidth="2.4"
+              points={obsLine}
+            />
+          )}
+          {points.map(
+            (p, idx) =>
+              p.observed !== null && (
+                <circle
+                  key={`obs-${idx}`}
+                  cx={getX(idx)}
+                  cy={getY(p.observed)}
+                  r="3"
+                  fill="#f59e0b"
+                />
+              ),
+          )}
+          {xgbLine && (
+            <polyline
+              fill="none"
+              stroke="#2563eb"
+              strokeWidth="1.8"
+              strokeDasharray="4 3"
+              points={xgbLine}
+            />
+          )}
+          {lastPt?.xgbPred !== null && (
+            <circle
+              cx={getX(lastIdx)}
+              cy={getY(lastPt.xgbPred)}
+              r="4"
+              fill="#2563eb"
+            />
+          )}
+          {rfLine && (
+            <polyline
+              fill="none"
+              stroke="#7c3aed"
+              strokeWidth="1.8"
+              strokeDasharray="4 3"
+              points={rfLine}
+            />
+          )}
+          {lastPt?.rfPred !== null && (
+            <circle
+              cx={getX(lastIdx)}
+              cy={getY(lastPt.rfPred)}
+              r="4"
+              fill="#7c3aed"
+            />
+          )}
+          {lstmLine && (
+            <polyline
+              fill="none"
+              stroke="#e11d48"
+              strokeWidth="1.8"
+              strokeDasharray="4 3"
+              points={lstmLine}
+            />
+          )}
+          {lastPt?.lstmPred !== null && (
+            <circle
+              cx={getX(lastIdx)}
+              cy={getY(lastPt.lstmPred)}
+              r="4"
+              fill="#e11d48"
+            />
+          )}
+          {cnnLine && (
+            <polyline
+              fill="none"
+              stroke="#0d9488"
+              strokeWidth="1.8"
+              strokeDasharray="4 3"
+              points={cnnLine}
+            />
+          )}
+          {lastPt?.cnnPred !== null && (
+            <circle
+              cx={getX(lastIdx)}
+              cy={getY(lastPt.cnnPred)}
+              r="4"
+              fill="#0d9488"
+            />
+          )}
+          {ensLine && (
+            <polyline
+              fill="none"
+              stroke="#059669"
+              strokeWidth="2.8"
+              points={ensLine}
+            />
+          )}
+          {lastPt?.ensemblePred !== null && (
+            <g>
+              <circle
+                cx={getX(lastIdx)}
+                cy={getY(lastPt.ensemblePred)}
+                r="5.5"
+                fill="#059669"
+              />
+              <text
+                x={getX(lastIdx) - 6}
+                y={getY(lastPt.ensemblePred) - 9}
+                textAnchor="end"
+                fontSize="10"
+                fontWeight="bold"
+                fill="#065f46"
+              >
+                {lastPt.ensemblePred} {unit}
+              </text>
+            </g>
+          )}
+        </svg>
+      </div>
+    </div>
+  );
+}
 
 interface MlModulesWorkspaceProps {
   selectedIcao: string;
@@ -128,17 +452,31 @@ export default function MlModulesWorkspace({
   onAutoSelectIcao,
 }: MlModulesWorkspaceProps) {
   const [selectedModel, setSelectedModel] =
-    useState<MlModelKey>("TS_CB_PREDICTION");
-  const [engineMode, setEngineMode] = useState<EngineMode>("ENSEMBLE");
+    useState<MlModelKey>("VISIBILITY_NOWCAST");
+
+  const [selectedEngines, setSelectedEngines] = useState<EngineKey[]>([
+    "XGBOOST",
+    "RF",
+    "LSTM",
+    "CNN",
+  ]);
 
   const activeModelMeta =
     ML_MODELS.find((m) => m.key === selectedModel) || ML_MODELS[0];
   const ActiveModelIcon = activeModelMeta.icon;
 
-  // State Cloud Model URLs (XGBoost & LSTM)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [xgbCloudUrl, setXgbCloudUrl] = useState<string | null>(null);
-  const [lstmCloudUrl, setLstmCloudUrl] = useState<string | null>(null);
+  const [modelUrls, setModelUrls] = useState<Record<EngineKey, string | null>>({
+    XGBOOST: null,
+    RF: null,
+    LSTM: null,
+    CNN: null,
+  });
+  const [evalChartUrl, setEvalChartUrl] = useState<string | null>(null);
+  const [tscbChartUrl, setTscbChartUrl] = useState<string | null>(null);
+  const [corrChartUrl, setCorrChartUrl] = useState<string | null>(null);
+  const [stationMetrics, setStationMetrics] =
+    useState<StationScientificMetrics | null>(null);
   const [isCheckingModel, setIsCheckingModel] = useState(false);
   const [isUploadingModel, setIsUploadingModel] = useState(false);
   const [modelUploadFeedback, setModelUploadFeedback] = useState<{
@@ -146,16 +484,35 @@ export default function MlModulesWorkspace({
     text: string;
   } | null>(null);
 
-  // State Inferensi Hybrid
   const [isPredicting, setIsPredicting] = useState(false);
   const [predictionError, setPredictionError] = useState<string | null>(null);
   const [result, setResult] = useState<HybridPredictionOutput | null>(null);
 
-  // Verifikasi langsung keberadaan file publik xgb_* dan lstm_* via HEAD request
-  const checkCloudModels = useCallback(async () => {
+  const toggleEngineChip = (eng: EngineKey) => {
+    setSelectedEngines((prev) => {
+      if (prev.includes(eng)) {
+        if (prev.length === 1) return prev;
+        return prev.filter((item) => item !== eng);
+      }
+      const order: EngineKey[] = ["XGBOOST", "RF", "LSTM", "CNN"];
+      return order.filter((k) => prev.includes(k) || k === eng);
+    });
+  };
+
+  const getCombinationBadge = () => {
+    const n = selectedEngines.length;
+    if (n === 1) return `Mode Single (${selectedEngines[0]})`;
+    if (n === 4) return "Grand 4-Model Super Ensemble (15/15)";
+    return `Kombinasi ${n}-Model Ensemble (${selectedEngines.join(" + ")})`;
+  };
+
+  const checkCloudAssets = useCallback(async () => {
     if (!supabase || selectedIcao === "ALL") {
-      setXgbCloudUrl(null);
-      setLstmCloudUrl(null);
+      setModelUrls({ XGBOOST: null, RF: null, LSTM: null, CNN: null });
+      setEvalChartUrl(null);
+      setTscbChartUrl(null);
+      setCorrChartUrl(null);
+      setStationMetrics(null);
       return;
     }
 
@@ -163,60 +520,94 @@ export default function MlModulesWorkspace({
     const pfx = selectedIcao.toLowerCase();
     const ts = Date.now();
 
-    const resolvePublicFile = async (candidates: string[]) => {
+    const resolvePublicUrl = async (candidates: string[]) => {
       for (const fileName of candidates) {
         const { data } = supabase!.storage
           .from("ml_models")
           .getPublicUrl(fileName);
-        const urlWithCacheBust = `${data.publicUrl}?t=${ts}`;
+        const urlWithTs = `${data.publicUrl}?t=${ts}`;
         try {
-          const res = await fetch(urlWithCacheBust, { method: "HEAD" });
-          if (res.ok) return urlWithCacheBust;
+          const res = await fetch(urlWithTs, { method: "HEAD" });
+          if (res.ok) return urlWithTs;
         } catch {
-          // lanjut cek kandidat berikutnya
+          // lanjut
         }
       }
       return null;
     };
 
     try {
-      const [foundXgb, foundLstm] = await Promise.all([
-        resolvePublicFile([
+      const [
+        uXgb,
+        uRf,
+        uLstm,
+        uCnn,
+        foundPng,
+        foundTscbPng,
+        foundCorrPng,
+        foundJsonUrl,
+      ] = await Promise.all([
+        resolvePublicUrl([
           `xgb_${activeModelMeta.filePrefix}_${pfx}.onnx`,
           `${activeModelMeta.filePrefix}_${pfx}.onnx`,
         ]),
-        resolvePublicFile([`lstm_${activeModelMeta.filePrefix}_${pfx}.onnx`]),
+        resolvePublicUrl([`rf_${activeModelMeta.filePrefix}_${pfx}.onnx`]),
+        resolvePublicUrl([`lstm_${activeModelMeta.filePrefix}_${pfx}.onnx`]),
+        resolvePublicUrl([`cnn_${activeModelMeta.filePrefix}_${pfx}.onnx`]),
+        resolvePublicUrl([`eval_chart_${pfx}.png`]),
+        resolvePublicUrl([`eval_tscb_${pfx}.png`]),
+        resolvePublicUrl([`eval_corr_${pfx}.png`]),
+        resolvePublicUrl([`metrics_${pfx}.json`]),
       ]);
 
-      setXgbCloudUrl(foundXgb);
-      setLstmCloudUrl(foundLstm);
+      setModelUrls({
+        XGBOOST: uXgb,
+        RF: uRf,
+        LSTM: uLstm,
+        CNN: uCnn,
+      });
+      setEvalChartUrl(foundPng);
+      setTscbChartUrl(foundTscbPng);
+      setCorrChartUrl(foundCorrPng);
+
+      if (foundJsonUrl) {
+        const jRes = await fetch(foundJsonUrl);
+        if (jRes.ok) {
+          setStationMetrics((await jRes.json()) as StationScientificMetrics);
+        } else {
+          setStationMetrics(null);
+        }
+      } else {
+        setStationMetrics(null);
+      }
     } finally {
       setIsCheckingModel(false);
     }
   }, [selectedIcao, activeModelMeta]);
 
   useEffect(() => {
-    checkCloudModels();
+    checkCloudAssets();
     setResult(null);
     setPredictionError(null);
     setModelUploadFeedback(null);
-  }, [checkCloudModels, engineMode]);
+  }, [checkCloudAssets]);
 
-  // Batch Upload file .onnx sekaligus ke Supabase Storage
-  const handleBatchUploadOnnx = async (
+  const handleBatchUploadAssets = async (
     e: React.ChangeEvent<HTMLInputElement>,
   ) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0 || !supabase) return;
     e.target.value = "";
 
-    const onnxFiles = files.filter((f) =>
-      f.name.toLowerCase().endsWith(".onnx"),
-    );
-    if (onnxFiles.length === 0) {
+    const validFiles = files.filter((f) => {
+      const n = f.name.toLowerCase();
+      return n.endsWith(".onnx") || n.endsWith(".json") || n.endsWith(".png");
+    });
+
+    if (validFiles.length === 0) {
       setModelUploadFeedback({
         type: "error",
-        text: "Tidak ada file .onnx yang dipilih.",
+        text: "Pilih file .onnx, metrics_<icao>.json, atau eval_*.png hasil ekstrak ZIP Colab.",
       });
       return;
     }
@@ -228,63 +619,45 @@ export default function MlModulesWorkspace({
     let detectedIcao: string | null = null;
 
     try {
-      for (const file of onnxFiles) {
+      for (const file of validFiles) {
         const lower = file.name.toLowerCase();
-        const matchPrefixed = lower.match(
-          /^(xgb|lstm)_[a-z_]+_([a-z]{4})\.onnx$/,
-        );
-        let storageName = lower;
-
-        if (matchPrefixed) {
-          detectedIcao = matchPrefixed[2].toUpperCase();
-        } else {
-          const matchIcao = lower.match(/_([a-z]{4})\.onnx$/);
-          const targetIcao = matchIcao
-            ? matchIcao[1].toUpperCase()
-            : selectedIcao !== "ALL"
-              ? selectedIcao
-              : null;
-
-          if (!targetIcao) continue;
-          detectedIcao = targetIcao;
-          const engPrefix = engineMode === "LSTM" ? "lstm" : "xgb";
-          storageName = `${engPrefix}_${
-            activeModelMeta.filePrefix
-          }_${targetIcao.toLowerCase()}.onnx`;
+        const matchIcao = lower.match(/_([a-z]{4})\.(onnx|json|png)$/);
+        if (matchIcao) {
+          detectedIcao = matchIcao[1].toUpperCase();
         }
+
+        const contentType = lower.endsWith(".json")
+          ? "application/json"
+          : lower.endsWith(".png")
+            ? "image/png"
+            : "application/octet-stream";
 
         const { error } = await supabase.storage
           .from("ml_models")
-          .upload(storageName, file, {
+          .upload(lower, file, {
             upsert: true,
-            contentType: "application/octet-stream",
+            contentType,
           });
 
         if (error) throw error;
         uploadedCount++;
       }
 
-      if (uploadedCount === 0) {
-        setModelUploadFeedback({
-          type: "error",
-          text: "Pilih stasiun spesifik terlebih dahulu atau pastikan nama file berformat xgb_<modul>_<icao>.onnx / lstm_<modul>_<icao>.onnx.",
-        });
+      setModelUploadFeedback({
+        type: "success",
+        text: `Berhasil mengunggah ${uploadedCount} file model & plot evaluasi ke Cloud Registry!`,
+      });
+
+      if (detectedIcao && selectedIcao !== detectedIcao && onAutoSelectIcao) {
+        onAutoSelectIcao(detectedIcao);
       } else {
-        setModelUploadFeedback({
-          type: "success",
-          text: `Berhasil mengunggah ${uploadedCount} file model .onnx ke Cloud Registry!`,
-        });
-        if (detectedIcao && selectedIcao !== detectedIcao && onAutoSelectIcao) {
-          onAutoSelectIcao(detectedIcao);
-        } else {
-          await checkCloudModels();
-        }
+        await checkCloudAssets();
       }
     } catch (err: unknown) {
       const msg =
         err && typeof err === "object" && "message" in err
           ? String((err as { message: unknown }).message)
-          : "Gagal mengunggah file .onnx.";
+          : "Gagal mengunggah file ke Supabase Storage.";
       setModelUploadFeedback({
         type: "error",
         text: `Error Upload: ${msg}`,
@@ -294,7 +667,6 @@ export default function MlModulesWorkspace({
     }
   };
 
-  // Eksekusi Inferensi sesuai Engine Pilihan (XGBoost / LSTM / Ensemble)
   const handleRunInference = async () => {
     if (!supabase) return;
     if (selectedIcao === "ALL") {
@@ -309,7 +681,7 @@ export default function MlModulesWorkspace({
     setResult(null);
 
     try {
-      const fetchLimit = selectedModel === "ANALOG_FORECASTING" ? 600 : 12;
+      const fetchLimit = selectedModel === "ANALOG_FORECASTING" ? 600 : 14;
 
       const { data, error } = await supabase
         .from("metar_observations")
@@ -323,14 +695,13 @@ export default function MlModulesWorkspace({
       if (error) throw new Error(error.message);
 
       const recordsAsc = ((data || []) as HybridMetarRecord[]).reverse();
-      const output = await runHybridModuleInference({
+      const output = await runMultiEngineInference({
         moduleKey: selectedModel,
         filePrefix: activeModelMeta.filePrefix,
         icao: selectedIcao,
-        engine: engineMode,
+        activeEngines: selectedEngines,
         recordsAsc,
-        xgbUrl: xgbCloudUrl,
-        lstmUrl: lstmCloudUrl,
+        modelUrls,
       });
 
       setResult(output);
@@ -361,6 +732,7 @@ export default function MlModulesWorkspace({
   };
 
   const pfx = selectedIcao === "ALL" ? "<icao>" : selectedIcao.toLowerCase();
+  const activeModEval = stationMetrics?.modules?.[selectedModel];
 
   return (
     <div className="space-y-6">
@@ -413,7 +785,7 @@ export default function MlModulesWorkspace({
                           : "bg-emerald-100 text-emerald-800"
                       }`}
                     >
-                      Hybrid ONNX
+                      4-Engine ONNX
                     </span>
                   </div>
                   <h4 className="font-extrabold text-xs md:text-sm leading-snug">
@@ -433,7 +805,7 @@ export default function MlModulesWorkspace({
         </div>
       </section>
 
-      {/* 2. WORKSPACE MODEL AKTIF + PEMILIH ENGINE (XGBOOST / LSTM / ENSEMBLE) */}
+      {/* 2. WORKSPACE MODEL AKTIF */}
       <section className="bg-white/95 border border-slate-200 rounded-2xl p-5 md:p-6 shadow-sm space-y-5">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-4 border-b border-slate-200">
           <div className="flex items-start gap-3">
@@ -461,80 +833,108 @@ export default function MlModulesWorkspace({
           </a>
         </div>
 
-        {/* PILIHAN ENGINE ARSITEKTUR (XGBOOST / PYTORCH LSTM / ENSEMBLE) */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-100/80 border border-slate-200">
-          <div className="flex items-center gap-2 text-xs font-extrabold text-slate-700">
-            <Cpu size={16} className="text-[#b84a39]" />
-            <span>Pilih Arsitektur Mesin Inferensi:</span>
+        {/* 4 MULTI-SELECT TOGGLE CHIPS (15 KOMBINASI DINAMIS) */}
+        <div className="p-4 rounded-xl bg-slate-100/80 border border-slate-200 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-extrabold text-slate-700">
+              <Cpu size={16} className="text-[#b84a39]" />
+              <span>
+                Pilih Kombinasi Mesin (Klik untuk Single, 2-Model, 3-Model, atau
+                4-Model Ensemble):
+              </span>
+            </div>
+            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-slate-800 text-amber-200">
+              {getCombinationBadge()}
+            </span>
           </div>
 
-          <div className="grid grid-cols-3 gap-1.5 bg-white p-1 rounded-xl border border-slate-200 shadow-xs">
-            {(
-              [
-                { key: "XGBOOST", label: "XGBoost (Tabular)" },
-                { key: "LSTM", label: "PyTorch LSTM" },
-                { key: "ENSEMBLE", label: "Ensemble (XGB + LSTM)" },
-              ] as const
-            ).map((item) => (
-              <button
-                key={item.key}
-                onClick={() => setEngineMode(item.key)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
-                  engineMode === item.key
-                    ? "bg-[#b84a39] text-white shadow-xs"
-                    : "text-slate-600 hover:bg-slate-100"
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {ENGINE_CHIPS.map((chip) => {
+              const isOn = selectedEngines.includes(chip.key);
+              return (
+                <button
+                  key={chip.key}
+                  onClick={() => toggleEngineChip(chip.key)}
+                  className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl border text-xs font-extrabold transition-all cursor-pointer ${
+                    isOn
+                      ? `${chip.activeBg} shadow-sm`
+                      : "bg-white hover:bg-slate-50 text-slate-600 border-slate-300"
+                  }`}
+                >
+                  <div className="text-left">
+                    <div>{chip.label}</div>
+                    <div
+                      className={`text-[10px] font-mono ${
+                        isOn ? "text-white/80" : "text-slate-400"
+                      }`}
+                    >
+                      {chip.tag}
+                    </div>
+                  </div>
+                  <div
+                    className={`w-5 h-5 rounded-md flex items-center justify-center border ${
+                      isOn
+                        ? "bg-white/20 border-white/40 text-white"
+                        : "border-slate-300 bg-slate-100 text-transparent"
+                    }`}
+                  >
+                    <Check size={13} strokeWidth={3} />
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        {/* PANEL MODEL REGISTRY (STATUS KEDUA FILE .ONNX & MULTI-UPLOAD) */}
+        {/* PANEL CLOUD REGISTRY & BATCH UPLOAD */}
         <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <div className="space-y-1.5">
               <div className="flex items-center gap-2 flex-wrap">
                 <FileCode2 size={16} className="text-[#b84a39]" />
                 <span className="text-xs font-extrabold text-slate-800">
-                  Cloud Model Registry ({selectedIcao})
+                  Cloud 4-Engine Registry ({selectedIcao})
                 </span>
               </div>
 
               {selectedIcao !== "ALL" && (
                 <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                  {ENGINE_CHIPS.map((chip) => {
+                    const urlReady = Boolean(modelUrls[chip.key]);
+                    return (
+                      <span
+                        key={chip.key}
+                        className={`px-2.5 py-0.5 rounded-full font-bold ${
+                          isCheckingModel
+                            ? "bg-slate-200 text-slate-600"
+                            : urlReady
+                              ? "bg-emerald-100 text-emerald-800"
+                              : "bg-amber-100 text-amber-800"
+                        }`}
+                      >
+                        {isCheckingModel ? "…" : urlReady ? "●" : "○"}{" "}
+                        {chip.prefix}_{activeModelMeta.filePrefix}_{pfx}.onnx
+                      </span>
+                    );
+                  })}
                   <span
                     className={`px-2.5 py-0.5 rounded-full font-bold ${
-                      isCheckingModel
-                        ? "bg-slate-200 text-slate-600"
-                        : xgbCloudUrl
-                          ? "bg-emerald-100 text-emerald-800"
-                          : "bg-amber-100 text-amber-800"
+                      stationMetrics
+                        ? "bg-emerald-100 text-emerald-800"
+                        : "bg-slate-200 text-slate-600"
                     }`}
                   >
-                    {isCheckingModel ? "…" : xgbCloudUrl ? "●" : "○"} xgb_
-                    {activeModelMeta.filePrefix}_{pfx}.onnx
-                  </span>
-                  <span
-                    className={`px-2.5 py-0.5 rounded-full font-bold ${
-                      isCheckingModel
-                        ? "bg-slate-200 text-slate-600"
-                        : lstmCloudUrl
-                          ? "bg-emerald-100 text-emerald-800"
-                          : "bg-amber-100 text-amber-800"
-                    }`}
-                  >
-                    {isCheckingModel ? "…" : lstmCloudUrl ? "●" : "○"} lstm_
-                    {activeModelMeta.filePrefix}_{pfx}.onnx
+                    {stationMetrics ? "●" : "○"} metrics_{pfx}.json
                   </span>
                 </div>
               )}
 
               <p className="text-[11px] text-slate-500">
-                Mendukung <strong>Batch Upload</strong>: kamu bisa memilih semua
-                file <code className="font-mono">.onnx</code> hasil ekstrak ZIP
-                Colab sekaligus dalam satu kali upload.
+                Upload seluruh isi folder ekstrak ZIP Colab (32 file{" "}
+                <code className="font-mono">.onnx</code>,{" "}
+                <code className="font-mono">metrics_{pfx}.json</code>, &amp;
+                gambar <code className="font-mono">eval_*.png</code>) sekaligus
+                lewat Batch Upload.
               </p>
             </div>
 
@@ -542,9 +942,9 @@ export default function MlModulesWorkspace({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".onnx"
+                accept=".onnx,.json,.png"
                 multiple
-                onChange={handleBatchUploadOnnx}
+                onChange={handleBatchUploadAssets}
                 className="hidden"
               />
               <button
@@ -554,8 +954,8 @@ export default function MlModulesWorkspace({
               >
                 <UploadCloud size={15} className="text-[#b84a39]" />
                 {isUploadingModel
-                  ? "Mengunggah .onnx..."
-                  : "Upload File .onnx (Batch)"}
+                  ? "Mengunggah..."
+                  : "Batch Upload (.onnx / .json / .png)"}
               </button>
 
               <button
@@ -566,13 +966,7 @@ export default function MlModulesWorkspace({
                 <Play size={15} />
                 {isPredicting
                   ? "Menghitung..."
-                  : `Jalankan ${
-                      engineMode === "ENSEMBLE"
-                        ? "Ensemble"
-                        : engineMode === "LSTM"
-                          ? "PyTorch LSTM"
-                          : "XGBoost"
-                    }`}
+                  : `Jalankan (${selectedEngines.length} Model)`}
               </button>
             </div>
           </div>
@@ -595,7 +989,7 @@ export default function MlModulesWorkspace({
           )}
         </div>
 
-        {/* PESAN ERROR INFERENSI */}
+        {/* PESAN ERROR */}
         {predictionError && (
           <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
             <AlertTriangle size={16} className="shrink-0" />
@@ -611,7 +1005,7 @@ export default function MlModulesWorkspace({
                 <div className="flex items-center gap-2">
                   <Activity size={18} className="text-[#b84a39]" />
                   <span className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
-                    Hasil Analisis {result.icao} • Engine: {result.engineUsed}
+                    Hasil {result.icao} • {result.combinationLabel}
                   </span>
                 </div>
                 <p className="text-xs font-mono text-slate-600 mt-1.5 bg-slate-100 px-2.5 py-1 rounded-lg inline-block">
@@ -642,34 +1036,28 @@ export default function MlModulesWorkspace({
               {result.summary}
             </p>
 
-            {/* PERBANDINGAN ENGINE JIKA MODE ENSEMBLE DIPILIH */}
-            {result.engineComparison && (
-              <div className="grid grid-cols-3 gap-2.5 p-3 rounded-xl bg-slate-800 text-white">
-                <div className="text-center border-r border-slate-700">
-                  <div className="text-[10px] font-bold text-slate-400">
-                    XGBoost (Tabular)
+            {/* BREAKDOWN PER ENGINE YANG DIPILIH */}
+            {result.engineBreakdown.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 p-3 rounded-xl bg-slate-800 text-white">
+                {result.engineBreakdown.map((item) => (
+                  <div
+                    key={item.engine}
+                    className="text-center px-2 py-1.5 rounded-lg bg-slate-900/60 border border-slate-700"
+                  >
+                    <div className="text-[10px] font-bold text-slate-400">
+                      {item.label}
+                    </div>
+                    <div className="text-sm font-extrabold text-amber-200 mt-0.5">
+                      {item.valueDisplay}
+                    </div>
                   </div>
-                  <div className="text-sm font-extrabold text-amber-200 mt-0.5">
-                    {result.engineComparison.xgbValue}
-                  </div>
-                </div>
-                <div className="text-center border-r border-slate-700">
-                  <div className="text-[10px] font-bold text-slate-400">
-                    PyTorch LSTM (Seq)
-                  </div>
-                  <div className="text-sm font-extrabold text-sky-300 mt-0.5">
-                    {result.engineComparison.lstmValue}
-                  </div>
-                </div>
-                <div className="text-center">
-                  <div className="text-[10px] font-bold text-slate-400">
-                    Gabungan Ensemble
-                  </div>
-                  <div className="text-sm font-black text-emerald-300 mt-0.5">
-                    {result.engineComparison.ensembleValue}
-                  </div>
-                </div>
+                ))}
               </div>
+            )}
+
+            {/* GRAFIK TIME-SERIES OBSERVED VS ESTIMATED */}
+            {result.chartData && (
+              <TimeSeriesForecastChart chartData={result.chartData} />
             )}
 
             {/* BREAKDOWN PROBABILITAS FLIGHT CATEGORY */}
@@ -739,6 +1127,219 @@ export default function MlModulesWorkspace({
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* PANEL VALIDASI ILMIAH (4 ENGINE METRICS, CORRELATION MATRIX & GRAFIK) */}
+        {stationMetrics && activeModEval && (
+          <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/70 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200">
+              <div className="flex items-center gap-2 text-xs md:text-sm font-extrabold text-slate-800">
+                <Table2 size={17} className="text-[#b84a39]" />
+                <span>
+                  Evaluasi 4-Engine &amp; Verifikasi Meteorologi —{" "}
+                  {stationMetrics.icao} (70% Train:{" "}
+                  {stationMetrics.trainSamples} | 30% Test:{" "}
+                  {stationMetrics.testSamples} sampel)
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {activeModEval.regression && (
+                <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-2.5">
+                  <div className="text-xs font-extrabold text-slate-800">
+                    Tabel Evaluasi Regresi (Test Set 30%)
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-200 text-slate-500 font-bold">
+                          <th className="py-2 pr-2">Model</th>
+                          <th className="py-2 px-2 text-right">R²</th>
+                          <th className="py-2 px-2 text-right">MAE</th>
+                          <th className="py-2 pl-2 text-right">RMSE</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-mono">
+                        {Object.entries(activeModEval.regression).map(
+                          ([mName, vals]) => (
+                            <tr key={mName} className="text-slate-800">
+                              <td className="py-2 pr-2 font-sans font-bold">
+                                {mName}
+                              </td>
+                              <td className="py-2 px-2 text-right font-bold text-emerald-700">
+                                {vals.r2.toFixed(3)}
+                              </td>
+                              <td className="py-2 px-2 text-right">
+                                {vals.mae.toFixed(1)}
+                              </td>
+                              <td className="py-2 pl-2 text-right">
+                                {vals.rmse.toFixed(1)}
+                              </td>
+                            </tr>
+                          ),
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {activeModEval.verification && (
+                <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-2.5">
+                  <div className="text-xs font-extrabold text-slate-800">
+                    Tabel Verifikasi ({activeModEval.verification.eventLabel})
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-200 text-slate-500 font-bold">
+                          <th className="py-2 pr-2">Model</th>
+                          <th className="py-2 px-2 text-right">POD</th>
+                          <th className="py-2 px-2 text-right">FAR</th>
+                          <th className="py-2 px-2 text-right">CSI</th>
+                          <th className="py-2 pl-2 text-right">TSS</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-mono">
+                        {[
+                          "XGBoost",
+                          "Random Forest",
+                          "PyTorch LSTM",
+                          "1D-CNN",
+                          "Grand Ensemble",
+                        ].map((mName) => {
+                          const row = activeModEval.verification![mName];
+                          if (!row || typeof row === "string") return null;
+                          return (
+                            <tr key={mName} className="text-slate-800">
+                              <td className="py-2 pr-2 font-sans font-bold">
+                                {mName}
+                              </td>
+                              <td className="py-2 px-2 text-right">
+                                {row.pod.toFixed(1)}%
+                              </td>
+                              <td className="py-2 px-2 text-right">
+                                {row.far.toFixed(1)}%
+                              </td>
+                              <td className="py-2 px-2 text-right font-bold text-blue-700">
+                                {row.csi.toFixed(1)}%
+                              </td>
+                              <td className="py-2 pl-2 text-right font-bold text-emerald-700">
+                                {row.tss.toFixed(1)}%
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {activeModEval.featureImportance && (
+              <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-3">
+                <div className="flex items-center gap-2 text-xs font-extrabold text-slate-800">
+                  <BarChart3 size={16} className="text-[#b84a39]" />
+                  <span>
+                    Top-8 Feature Importance (Hasil Training{" "}
+                    {stationMetrics.icao})
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  {activeModEval.featureImportance.map((feat) => (
+                    <div
+                      key={feat.name}
+                      className="p-2.5 rounded-lg bg-slate-50 border border-slate-200/80 space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-mono font-bold text-slate-700 truncate">
+                          {feat.name}
+                        </span>
+                        <span className="font-mono font-extrabold text-[#b84a39]">
+                          {feat.importance.toFixed(3)}
+                        </span>
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-[#b84a39] rounded-full"
+                          style={{
+                            width: `${Math.min(100, feat.importance * 300)}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* GRAFIK VALIDASI VISIBILITAS 3-PANEL */}
+            {evalChartUrl && selectedModel === "VISIBILITY_NOWCAST" && (
+              <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-3">
+                <div className="flex items-center gap-2 text-xs font-extrabold text-slate-800">
+                  <ImageIcon size={16} className="text-[#b84a39]" />
+                  <span>
+                    Grafik Validasi Empiris 4-Engine Test Set 30% — (a)
+                    Time-Series, (b) Scatter 1:1, (c) Probability Density (
+                    {stationMetrics.icao})
+                  </span>
+                </div>
+                <div className="rounded-xl overflow-hidden border border-slate-200 bg-white">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={evalChartUrl}
+                    alt={`Grafik Evaluasi 4-Engine ${stationMetrics.icao}`}
+                    className="w-full max-w-3xl mx-auto h-auto"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* GRAFIK VALIDASI DETEKSI TS/CB (TIMELINE SPIKE, CONFUSION MATRIX, ROC-AUC) */}
+            {tscbChartUrl && selectedModel === "TS_CB_PREDICTION" && (
+              <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-3">
+                <div className="flex items-center gap-2 text-xs font-extrabold text-slate-800">
+                  <ImageIcon size={16} className="text-[#b84a39]" />
+                  <span>
+                    Grafik Validasi Deteksi TS/CB Test Set 30% — (a) Event
+                    Timeline, (b) Confusion Matrix, (c) ROC-AUC (
+                    {stationMetrics.icao})
+                  </span>
+                </div>
+                <div className="rounded-xl overflow-hidden border border-slate-200 bg-white">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={tscbChartUrl}
+                    alt={`Grafik Evaluasi TS/CB ${stationMetrics.icao}`}
+                    className="w-full max-w-3xl mx-auto h-auto"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* PEARSON CORRELATION MATRIX HEATMAP */}
+            {corrChartUrl && (
+              <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-3">
+                <div className="flex items-center gap-2 text-xs font-extrabold text-slate-800">
+                  <ImageIcon size={16} className="text-[#b84a39]" />
+                  <span>
+                    Pearson Correlation Matrix Antar-Variabel Meteorologi (
+                    {stationMetrics.icao})
+                  </span>
+                </div>
+                <div className="rounded-xl overflow-hidden border border-slate-200 bg-white">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={corrChartUrl}
+                    alt={`Correlation Matrix ${stationMetrics.icao}`}
+                    className="w-full max-w-2xl mx-auto h-auto"
+                  />
+                </div>
+              </div>
+            )}
           </div>
         )}
       </section>

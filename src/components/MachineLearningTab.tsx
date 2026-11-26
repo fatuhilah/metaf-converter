@@ -425,7 +425,7 @@ export default function MachineLearningTab() {
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-base md:text-lg font-extrabold text-slate-800">
-                  Dataset Warehouse — Supabase (METAF_AI)
+                  Dataset Warehouse
                 </h2>
                 {dbStatus === "CONNECTED" && (
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">
