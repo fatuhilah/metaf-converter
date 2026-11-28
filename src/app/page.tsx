@@ -15,6 +15,7 @@ import {
   ClockAlert,
   BrainCircuit,
   Compass,
+  FileSpreadsheet,
 } from "lucide-react";
 import MetarTableTab from "@/components/MetarTableTab";
 import MetarReportTab from "@/components/MetarReportTab";
@@ -23,6 +24,7 @@ import TafVerificationTab from "@/components/TafVerificationTab";
 import AcsTab from "@/components/AcsTab";
 import MachineLearningTab from "@/components/MachineLearningTab";
 import RunwayWindTab from "@/components/RunwayWindTab";
+import WeatherBriefTab from "@/components/WeatherBriefTab";
 
 // Durasi sesi: 24 jam dalam milidetik
 const SESSION_DURATION_MS = 24 * 60 * 60 * 1000;
@@ -275,7 +277,7 @@ export default function Home() {
 
       {/* Kontainer Utama Warm Frosted Glass Transparan */}
       <main className="relative z-10 max-w-7xl mx-auto bg-stone-100/45 backdrop-blur-md border border-white/60 shadow-[0_24px_60px_rgba(15,23,42,0.32)] rounded-3xl overflow-hidden mb-16 md:mb-0">
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 border-b border-white/35 overflow-hidden">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 border-b border-white/35 overflow-hidden">
           <button
             onClick={() => setActiveTab("METAR_TABLE")}
             className={navTabStyle(
@@ -328,13 +330,19 @@ export default function Home() {
               "border-b md:border-b-0 md:border-r border-white/35",
             )}
           >
-            <BrainCircuit size={16} /> Machine Learning
+            <BrainCircuit size={16} /> ML/DL
           </button>
           <button
             onClick={() => setActiveTab("RUNWAY_WIND")}
-            className={navTabStyle("RUNWAY_WIND", "col-span-2 md:col-span-1")}
+            className={navTabStyle("RUNWAY_WIND", "border-r border-white/35")}
           >
             <Compass size={16} /> Runway Wind
+          </button>
+          <button
+            onClick={() => setActiveTab("WEATHER_BRIEF")}
+            className={navTabStyle("WEATHER_BRIEF")}
+          >
+            <FileSpreadsheet size={16} /> Weather Brief
           </button>
         </div>
 
@@ -347,6 +355,7 @@ export default function Home() {
           {activeTab === "ACS_CLIMATOLOGY" && <AcsTab />}
           {activeTab === "MACHINE_LEARNING" && <MachineLearningTab />}
           {activeTab === "RUNWAY_WIND" && <RunwayWindTab />}
+          {activeTab === "WEATHER_BRIEF" && <WeatherBriefTab />}
         </div>
       </main>
 
